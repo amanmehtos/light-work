@@ -1,0 +1,3 @@
+[submodule "vendor/diurnal-ui"]
+	path = vendor/diurnal-ui
+	url = https://github.com/amanmehtos/diurnal-ui

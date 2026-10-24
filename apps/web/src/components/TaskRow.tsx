@@ -1,25 +1,24 @@
 /**
- * One task, as a card resting on the desk.
+ * One task, as a flat card on the page.
  *
- * Each row is its own low panel rather than a line in a list, because that is
- * what makes Diurnal visible: a dozen cards all throwing the same shadow in
- * the same direction reads as objects on a surface, which a bordered list does
- * not. The elevation is kept low so a long list does not turn into soup.
+ * Diurnal is monochrome — "ink, paper and greys, nothing else; emphasis comes
+ * from contrast and elevation" — so priority is carried by badge weight rather
+ * than by colour: solid for urgent, outlined for high, plain for medium,
+ * nothing at all for none. An earlier version of this file used red, amber and
+ * blue, which is precisely what the library exists not to do.
  */
 
 import type { Label, Task } from "@light/core";
 import type { LightStore, Operations } from "@light/client-sdk";
-import { Button, Checkbox, Chip, Inline, Panel, Text } from "@light/diurnal";
 
-/** `r g b` triples, matching the priority colours in the stylesheet. */
-const PRIORITY_TINT: Record<number, string | undefined> = {
-  1: "192 57 43",
-  2: "204 122 40",
-  3: "63 124 172",
-  4: undefined,
+const PRIORITY_NAME = ["", "urgent", "high", "medium", "none"];
+
+/** Weight, not hue: the only axis a monochrome system has. */
+const PRIORITY_BADGE: Record<number, string> = {
+  1: "dn-badge dn-badge--solid",
+  2: "dn-badge dn-badge--outline",
+  3: "dn-badge",
 };
-
-const PRIORITY_NAME = ["", "Urgent", "High", "Medium", "None"];
 
 function humanDuration(seconds: number): string {
   const minutes = Math.round(seconds / 60);
@@ -31,11 +30,11 @@ function humanDuration(seconds: number): string {
 
 function formatDay(iso: string, today: string): string {
   const day = iso.slice(0, 10);
-  if (day === today) return "Today";
+  if (day === today) return "today";
   const tomorrow = new Date(new Date(`${today}T00:00:00Z`).getTime() + 86_400_000)
     .toISOString()
     .slice(0, 10);
-  if (day === tomorrow) return "Tomorrow";
+  if (day === tomorrow) return "tomorrow";
   return new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -73,76 +72,85 @@ export function TaskRow({
 
   return (
     <li>
-      {/* Selecting a task lifts it off the desk. */}
-      <Panel level={selected ? 1.6 : 0.6} flush className={selected ? "task selected" : "task"}>
-        <Checkbox
-          tint={PRIORITY_TINT[task.priority]}
-          checked={task.isCompleted}
-          aria-label={`Complete ${task.content}`}
-          onChange={onComplete}
-        />
+      {/* Selecting a task lifts it off the page — elevation is how this system
+          says "this one". */}
+      <div className={`dn-card dn-row task${selected ? " selected" : ""}`} style={selected ? { ["--dn-elev" as string]: "18px" } : undefined}>
+        <label className="dn-check">
+          <input
+            type="checkbox"
+            checked={task.isCompleted}
+            aria-label={`Complete ${task.content}`}
+            onChange={onComplete}
+          />
+        </label>
 
-        <button className="task-body" onClick={onSelect}>
-          <Text className="title" strike={task.isCompleted}>
-            {task.content}
-          </Text>
+        <button className="dn-row__body" onClick={onSelect}>
+          <span className={task.isCompleted ? "title done" : "title"}>{task.content}</span>
 
-          <Inline gap={1} className="meta">
+          <span className="meta">
             {task.priority < 4 && (
-              <Chip tint={PRIORITY_TINT[task.priority]}>
+              <span className={PRIORITY_BADGE[task.priority]}>
                 p{task.priority} {PRIORITY_NAME[task.priority]}
-              </Chip>
+              </span>
             )}
 
             {task.due !== null && (
-              <Chip tone={overdue ? "danger" : "neutral"}>
+              <span className={overdue ? "dn-badge dn-badge--danger" : "dn-badge"}>
                 {formatDay(task.due.date, today)}
-                {task.due.isRecurring && <span title={task.due.text ?? ""}>↻</span>}
-              </Chip>
+                {task.due.isRecurring && <i title={task.due.text ?? ""} />}
+              </span>
             )}
 
             {/* Outlined, so a deadline never reads as the same kind of thing
                 as the due date sitting next to it. */}
             {task.deadline !== null && (
-              <Chip tone="outline" title="Deadline — when this is actually owed">
+              <span className="dn-badge dn-badge--outline" title="Deadline — when this is actually owed">
                 due by {formatDay(task.deadline.date, today)}
-              </Chip>
+              </span>
             )}
 
             {task.duration !== null && (
-              <Chip>
+              <span className="dn-badge">
                 {task.duration.amount}
                 {task.duration.unit === "minute" ? "m" : "d"}
-              </Chip>
+              </span>
             )}
 
             {labels.map((label) => (
-              <Chip key={label.id}>@{label.name}</Chip>
+              <span key={label.id} className="dn-badge">
+                @{label.name}
+              </span>
             ))}
 
             {focus.sessions > 0 && (
-              <Chip tone="accent" title={`${focus.sessions} focus session(s)`}>
-                ◴ {humanDuration(focus.focusedSeconds)}
-              </Chip>
+              <span className="dn-badge dn-badge--outline" title={`${focus.sessions} focus session(s)`}>
+                focused {humanDuration(focus.focusedSeconds)}
+              </span>
             )}
-          </Inline>
+          </span>
 
-          {task.description !== "" && (
-            <Text tone="soft" size="small" className="description">
-              {task.description}
-            </Text>
-          )}
+          {task.description !== "" && <span className="dn-hint description">{task.description}</span>}
         </button>
 
-        <span className="reorder">
-          <Button variant="quiet" aria-label={`Move ${task.content} up`} onClick={onMoveUp}>
+        <span className="dn-row__aside">
+          <button
+            type="button"
+            className="dn-btn dn-btn--ghost dn-btn--sm"
+            aria-label={`Move ${task.content} up`}
+            onClick={onMoveUp}
+          >
             ↑
-          </Button>
-          <Button variant="quiet" aria-label={`Move ${task.content} down`} onClick={onMoveDown}>
+          </button>
+          <button
+            type="button"
+            className="dn-btn dn-btn--ghost dn-btn--sm"
+            aria-label={`Move ${task.content} down`}
+            onClick={onMoveDown}
+          >
             ↓
-          </Button>
+          </button>
         </span>
-      </Panel>
+      </div>
     </li>
   );
 }

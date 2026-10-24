@@ -9,7 +9,6 @@
 
 import { useState } from "react";
 import type { Priority } from "@light/core";
-import { Button, TextField } from "@light/diurnal";
 
 export interface ParsedEntry {
   content: string;
@@ -70,26 +69,39 @@ export function AddTask({
 
   return (
     <form className="add-task" onSubmit={submit}>
-      <TextField
-        label="New task"
-        labelHidden
-        className="add-task-text"
-        value={text}
-        disabled={disabled}
-        placeholder="Add a task —  p1  @label  // notes"
-        onChange={(event) => setText(event.target.value)}
-      />
-      <TextField
-        label="Due date"
-        labelHidden
-        type="date"
-        value={due}
-        disabled={disabled}
-        onChange={(event) => setDue(event.target.value)}
-      />
-      <Button variant="primary" type="submit" disabled={disabled || parseEntry(text).content === ""}>
+      <div className="dn-field add-task-text">
+        <label className="dn-label visually-hidden" htmlFor="add-task-content">
+          New task
+        </label>
+        <input
+          id="add-task-content"
+          className="dn-input"
+          value={text}
+          disabled={disabled}
+          placeholder="Add a task —  p1  @label  // notes"
+          onChange={(event) => setText(event.target.value)}
+        />
+      </div>
+      <div className="dn-field add-task-date">
+        <label className="dn-label visually-hidden" htmlFor="add-task-due">
+          Due date
+        </label>
+        <input
+          id="add-task-due"
+          className="dn-input"
+          type="date"
+          value={due}
+          disabled={disabled}
+          onChange={(event) => setDue(event.target.value)}
+        />
+      </div>
+      <button
+        className="dn-btn dn-btn--primary"
+        type="submit"
+        disabled={disabled || parseEntry(text).content === ""}
+      >
         Add
-      </Button>
+      </button>
     </form>
   );
 }

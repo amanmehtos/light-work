@@ -30,8 +30,10 @@ goes, not where you guessed it would.
 - **The cloud sits behind four ports.** Cloudflare is the only deployed target, but
   the server itself has no knowledge of it — one conformance suite runs against
   three backends, and the whole API runs in plain Node with no cloud account.
-- **The interface is lit by the time of day.** [Diurnal](packages/diurnal) treats the
-  page as a surface and derives every shadow from where the sun actually is.
+- **The interface is lit by the sky.** [Diurnal UI](https://github.com/amanmehtos/diurnal-ui)
+  lights the page with the sun by day and a full moon by night, in the viewer's own
+  sky, and softens the light when the weather does. It is vendored as a submodule at
+  `vendor/diurnal-ui` and kept pristine.
 
 ## Documentation
 
@@ -40,7 +42,7 @@ goes, not where you guessed it would.
 - [Sync protocol](docs/sync-protocol.md) — the wire format
 - [The MCP server](docs/mcp.md) — the tools an agent gets
 - [Hosting on more than one cloud](docs/hosting.md) — the ports, and the AWS plan
-- [Diurnal](packages/diurnal/README.md) — the UI kit
+- [Diurnal UI](vendor/diurnal-ui/README.md) — the UI kit (upstream)
 - [Moving in from Todoist](docs/migrating-from-todoist.md)
 - [Deploying](docs/deploying.md)
 
@@ -52,10 +54,10 @@ goes, not where you guessed it would.
 | `packages/client-sdk` | Local store, sync client, recurrence, domain operations | 34 tests |
 | `packages/todoist-import` | Todoist → Light Week migration, with a CLI | 49 tests |
 | `packages/mcp` | MCP tools, stdio server, session | 30 tests |
-| `packages/diurnal` | The UI kit: light from the time of day | 34 tests |
 | `packages/server-core` | The server, with the cloud behind four ports | 50 tests, no cloud needed |
 | `services/api` | Cloudflare adapters: Durable Object, D1, sockets | 34 tests in workerd |
-| `apps/web` | React PWA, built on Diurnal | 24 end-to-end checks in a browser |
+| `apps/web` | React PWA, built on Diurnal UI | 24 end-to-end checks in a browser |
+| `vendor/diurnal-ui` | [Diurnal UI](https://github.com/amanmehtos/diurnal-ui), as a submodule | upstream |
 | `apps/desktop` | Tauri shell | written, never compiled |
 | `apps/ios` | LightKit — the Light Minute bridge | written, never compiled |
 
@@ -79,10 +81,17 @@ Not done yet, in rough order of what is missing most:
   handing an agent a credential rather than granting it scoped access.
 - **Richer views.** Filters are imported and stored, but the web app does not
   yet run them; there is no board view and no drag-and-drop.
+- **Three Diurnal components live in the wrong place.** `.dn-nav`, `.dn-row` and
+  `.dn-badge--danger` are in `apps/web/src/diurnal-additions.css`, written in the
+  library's idiom and ready to move into `diurnal-ui` itself.
 
 ## Running it
 
 ```sh
+# Diurnal UI is a submodule, so a fresh clone needs it.
+git clone --recurse-submodules <this repo>
+# (or, in an existing clone: git submodule update --init)
+
 pnpm install
 pnpm -r test
 

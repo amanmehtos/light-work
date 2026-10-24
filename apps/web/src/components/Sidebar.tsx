@@ -3,12 +3,15 @@
  *
  * Projects nest arbitrarily deep — the account this was built against goes
  * three levels — so the tree renders recursively rather than assuming a depth.
+ *
+ * `.dn-nav` is one of the three things Light Week needs that Diurnal does not
+ * have yet; it is defined in `diurnal-additions.css`, in the library's idiom,
+ * ready to move upstream.
  */
 
 import type { Project } from "@light/core";
 import { compareOrder } from "@light/core";
 import type { LightStore } from "@light/client-sdk";
-import { Heading, NavItem, Text } from "@light/diurnal";
 
 export type View =
   | { kind: "today" }
@@ -16,6 +19,33 @@ export type View =
   | { kind: "all" }
   | { kind: "completed" }
   | { kind: "project"; projectId: string };
+
+function NavItem({
+  label,
+  count,
+  selected,
+  depth = 0,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  selected: boolean;
+  depth?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="dn-nav__item"
+      aria-current={selected ? "page" : undefined}
+      style={{ paddingLeft: `${10 + depth * 14}px` }}
+      onClick={onClick}
+    >
+      <span className="dn-nav__label">{label}</span>
+      {count > 0 && <span className="dn-nav__count">{count}</span>}
+    </button>
+  );
+}
 
 export function Sidebar({
   store,
@@ -46,7 +76,7 @@ export function Sidebar({
     const siblings = byParent.get(parentId) ?? [];
     if (siblings.length === 0) return null;
     return (
-      <ul className="tree" role="group">
+      <ul className="dn-nav" role="group">
         {siblings.map((project) => (
           <li key={project.id}>
             <NavItem
@@ -74,7 +104,7 @@ export function Sidebar({
 
   return (
     <nav className="sidebar" aria-label="Views and projects">
-      <ul className="tree">
+      <ul className="dn-nav">
         {views.map((entry) => (
           <li key={entry.label}>
             <NavItem
@@ -87,14 +117,8 @@ export function Sidebar({
         ))}
       </ul>
 
-      <Heading level={3} className="sidebar-heading">
-        Projects
-      </Heading>
-      {renderTree(null, 0) ?? (
-        <Text tone="soft" size="small" className="pad">
-          No projects yet.
-        </Text>
-      )}
+      <div className="dn-eyebrow sidebar-heading">Projects</div>
+      {renderTree(null, 0) ?? <p className="dn-hint pad">No projects yet.</p>}
     </nav>
   );
 }

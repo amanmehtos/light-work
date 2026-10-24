@@ -1,17 +1,7 @@
 import { useMemo, useState } from "react";
 import { compareOrder, type Task } from "@light/core";
-import {
-  Button,
-  Chip,
-  DiurnalProvider,
-  Heading,
-  Panel,
-  Stack,
-  SunDial,
-  Surface,
-  Text,
-} from "@light/diurnal";
 import { loadSession, logout, type StoredSession } from "./auth.js";
+import { ThemeToggle, describeLight, useDiurnal } from "./diurnal.js";
 import { useLightWeek } from "./store-hook.js";
 import { AddTask, type ParsedEntry } from "./components/AddTask.js";
 import { SignIn } from "./components/SignIn.js";
@@ -30,18 +20,12 @@ function todayISO(): string {
 export function App() {
   const [session, setSession] = useState<StoredSession | null>(() => loadSession());
 
-  return (
-    // The sun drives the whole page: shadow direction, shadow length, and
-    // whether the palette is the daytime or the night one.
-    <DiurnalProvider>
-      <Surface>
-        {session === null ? (
-          <SignIn onSignedIn={setSession} />
-        ) : (
-          <Workspace session={session} onSignOut={() => setSession(null)} />
-        )}
-      </Surface>
-    </DiurnalProvider>
+  // Diurnal's runtime is installed by importing it in main.tsx; it writes the
+  // light to :root by itself, so there is no provider to mount here.
+  return session === null ? (
+    <SignIn onSignedIn={setSession} />
+  ) : (
+    <Workspace session={session} onSignOut={() => setSession(null)} />
   );
 }
 
@@ -182,90 +166,83 @@ function Workspace({
             ? "Completed"
             : "All tasks";
 
-  const statusTone = status.state === "offline" || status.state === "error" ? "danger" : "neutral";
+  const light = useDiurnal();
 
   return (
     <div className="app">
-      <Panel level={1.2} flush className="topbar" role="banner">
-        <SunDial />
-        <Heading level={2}>Light Week</Heading>
-        <Chip tone={statusTone} className={`status ${status.state}`}>
-          {status.state === "syncing" && "Syncing…"}
+      <header className="dn-card dn-card--flat topbar" data-dn-scroll-edge>
+        {/* The library's own control: it flips sun and moon, and redraws
+            itself to match. */}
+        <ThemeToggle title={describeLight(light)} />
+        <h2 className="topbar-title">Light Week</h2>
+        <span className={`dn-badge status ${status.state}`}>
+          {status.state === "syncing" && "syncing"}
           {status.state === "idle" && (status.pending > 0 ? `${status.pending} queued` : "Synced")}
-          {status.state === "offline" && "Offline — changes are saved locally"}
-          {status.state === "error" && (status.lastError ?? "Sync problem")}
-        </Chip>
+          {status.state === "offline" && "offline — saved locally"}
+          {status.state === "error" && (status.lastError ?? "sync problem")}
+        </span>
         <span className="spacer" />
-        <Text tone="soft" size="small">
-          {session.user.email}
-        </Text>
-        <Button
-          variant="ghost"
+        <span className="dn-hint">{session.user.email}</span>
+        <button
+          type="button"
+          className="dn-btn dn-btn--ghost dn-btn--sm"
           onClick={() => {
             void logout(session.token).then(onSignOut);
           }}
         >
           Sign out
-        </Button>
-      </Panel>
+        </button>
+      </header>
 
       {error !== null && (
-        <Panel inset role="alert" className="banner">
-          <Text size="small">{error}</Text>
-        </Panel>
+        <div role="alert" className="dn-well banner">
+          {error}
+        </div>
       )}
 
       <div className="body">
-        <Panel level={0.8} flush className="sidebar-panel">
+        <div className="dn-card dn-card--flat sidebar-panel">
           <Sidebar store={store} view={view} onSelect={setView} counts={counts} />
-        </Panel>
+        </div>
 
         <main className="main-column">
-          <Stack gap={4}>
-            <Stack gap={1}>
-              <Heading level={1}>{heading}</Heading>
-              {project !== null && project.description !== "" && (
-                <Text tone="soft" as="p" className="project-description">
-                  {project.description}
-                </Text>
-              )}
-            </Stack>
+          <h1>{heading}</h1>
+          {project !== null && project.description !== "" && (
+            <p className="dn-prose project-description">{project.description}</p>
+          )}
 
-            <AddTask onAdd={addTask} disabled={!ready} />
+          <AddTask onAdd={addTask} disabled={!ready} />
 
-            {!ready ? (
-              <Text tone="soft" className="pad">
-                Loading your tasks…
-              </Text>
-            ) : visible.length === 0 ? (
-              <Text tone="soft" className="pad">
-                {view.kind === "today"
-                  ? "Nothing due today."
-                  : view.kind === "upcoming"
-                    ? "Nothing scheduled ahead."
-                    : view.kind === "completed"
-                      ? "Nothing finished yet."
-                      : "No tasks here yet."}
-              </Text>
-            ) : (
-              <ul className="tasks">
-                {visible.map((task) => (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    store={store}
-                    ops={ops}
-                    today={today}
-                    selected={selectedId === task.id}
-                    onComplete={() => complete(task)}
-                    onSelect={() => setSelectedId(selectedId === task.id ? null : task.id)}
-                    onMoveUp={() => move(task, -1)}
-                    onMoveDown={() => move(task, 1)}
-                  />
-                ))}
-              </ul>
-            )}
-          </Stack>
+          {!ready ? (
+            <p className="dn-hint pad">Loading your tasks…</p>
+          ) : visible.length === 0 ? (
+            <p className="dn-hint pad">
+              {view.kind === "today"
+                ? "Nothing due today."
+                : view.kind === "upcoming"
+                  ? "Nothing scheduled ahead."
+                  : view.kind === "completed"
+                    ? "Nothing finished yet."
+                    : "No tasks here yet."}
+            </p>
+          ) : (
+            <ul className="tasks">
+              {visible.map((task) => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  store={store}
+                  ops={ops}
+                  today={today}
+                  selected={selectedId === task.id}
+                  onComplete={() => complete(task)}
+                  onSelect={() => setSelectedId(selectedId === task.id ? null : task.id)}
+                  onMoveUp={() => move(task, -1)}
+                  onMoveDown={() => move(task, 1)}
+                />
+              ))}
+            </ul>
+          )}
         </main>
       </div>
     </div>

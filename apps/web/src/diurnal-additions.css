@@ -1,0 +1,99 @@
+/*
+ * Proposed additions to Diurnal UI.
+ *
+ * Light Week needs three things the library does not have yet. They are
+ * written here in Diurnal's own idiom — its tokens, its naming, monochrome
+ * only, elevation through `--dn-elev` — so they can move into
+ * `vendor/diurnal-ui/diurnal.css` as-is when there is push access to that
+ * repository. Nothing in this file invents a colour or a shadow of its own.
+ *
+ *   .dn-nav        a list of navigation rows with counts (sidebars)
+ *   .dn-badge--danger  the badge that matches .dn-btn--danger
+ *   .dn-row        a flat card built to hold a control, a body and an aside
+ */
+
+/* ---------------------------------------------------------------- Nav */
+
+.dn-nav { list-style: none; margin: 0; padding: 0; }
+
+.dn-nav__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.375rem 0.625rem;
+  font: 400 0.875rem/1.4 var(--dn-body);
+  color: var(--dn-ink-2);
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--dn-radius-sm);
+  cursor: pointer;
+  transition: background-color .2s ease, color .2s ease, border-color .2s ease;
+}
+
+.dn-nav__item:hover { background: var(--dn-sunken); color: var(--dn-ink); }
+
+/* The current page is marked by contrast, not by hue. */
+.dn-nav__item[aria-current="page"] {
+  color: var(--dn-ink);
+  background: var(--dn-sunken);
+  border-color: var(--dn-line-strong);
+}
+
+.dn-nav__item:focus-visible { outline: 2px solid var(--dn-focus); outline-offset: 2px; }
+
+.dn-nav__label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dn-nav__count {
+  font: 400 0.75rem/1 var(--dn-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--dn-muted);
+}
+
+.dn-nav__item[aria-current="page"] .dn-nav__count { color: var(--dn-ink-2); }
+
+/* ---------------------------------------------------------------- Badge */
+
+/* The badge that matches .dn-btn--danger, using the token already in the
+   system rather than a new one. */
+.dn-badge--danger {
+  color: var(--dn-danger);
+  border-color: var(--dn-danger);
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------- Row */
+
+/* A flat card laid out as control · body · aside, for lists of things that
+   each carry an action. Raises towards the light on hover, like a.dn-card. */
+.dn-row {
+  /* Lower than a standalone .dn-card: at a low sun a column of them would
+     otherwise be more shadow than card. */
+  --dn-elev: 9px;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+}
+
+.dn-row:hover { --dn-elev: 10px; border-color: var(--dn-line-strong); }
+
+.dn-row__body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.3125rem;
+  justify-items: start;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.dn-row__body:focus-visible { outline: 2px solid var(--dn-focus); outline-offset: 2px; }
+
+.dn-row__aside { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }

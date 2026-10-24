@@ -30,9 +30,6 @@ importers:
       '@light/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@light/diurnal':
-        specifier: workspace:*
-        version: link:../../packages/diurnal
       react:
         specifier: 19.3.1
         version: 19.3.1
@@ -77,21 +74,6 @@ importers:
 
   packages/core:
     devDependencies:
-      typescript:
-        specifier: 5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: 3.2.4
-        version: 3.2.4(@types/node@24.10.1)(lightningcss@1.33.0)(tsx@4.23.15)
-
-  packages/diurnal:
-    devDependencies:
-      '@types/react':
-        specifier: 19.3.0
-        version: 19.3.0
-      react:
-        specifier: 19.3.1
-        version: 19.3.1
       typescript:
         specifier: 5.9.3
         version: 5.9.3

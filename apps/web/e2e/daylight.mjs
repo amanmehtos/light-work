@@ -1,10 +1,11 @@
 /**
- * Captures the app at several times of day.
+ * Captures the app under different skies.
  *
- * Diurnal's whole claim is that the light moves, and that is not something a
- * unit test can confirm — it is either visible or it is not. This fixes the
- * browser clock at a few hours and shoots the same screen at each, so a change
- * to the lighting model can be looked at rather than argued about.
+ * Diurnal's claim is that the light moves and the weather softens it, and that
+ * is not something a unit test can confirm — it is either visible or it is
+ * not. This drives the library's own `preview()` and `setWeather()` and shoots
+ * the same screen for each, so a change to the lighting can be looked at
+ * rather than argued about.
  *
  *   node e2e/daylight.mjs --out /some/dir
  *
@@ -18,24 +19,20 @@ const APP = process.env.APP_URL ?? "http://127.0.0.1:5173";
 const outIndex = process.argv.indexOf("--out");
 const outDir = outIndex === -1 ? "." : process.argv[outIndex + 1];
 
-/**
- * The day being shot. The seeded tasks are due on this date, not on the real
- * one — the browser clock is fixed here, so "today" in the app means this.
- */
-const DAY = "2026-06-21";
+/** The day being shot; seeded tasks are due on it so "Today" has contents. */
+const DAY = new Date().toISOString().slice(0, 10);
 
-const HOURS = [
-  { label: "07-00-dawn", time: `${DAY}T07:00:00` },
-  { label: "12-00-noon", time: `${DAY}T12:00:00` },
-  { label: "17-30-dusk", time: `${DAY}T17:30:00` },
-  { label: "23-00-night", time: `${DAY}T23:00:00` },
+const SKIES = [
+  { label: "07-00-sun-low", mode: "light", hour: 7, weather: "clear" },
+  { label: "13-00-sun-high", mode: "light", hour: 13, weather: "clear" },
+  { label: "13-00-overcast", mode: "light", hour: 13, weather: "overcast" },
+  { label: "23-00-moon", mode: "dark", hour: 23, weather: "clear" },
 ];
 
 const browser = await chromium.launch();
-const context = await browser.newContext({ viewport: { width: 1180, height: 760 } });
+const context = await browser.newContext({ viewport: { width: 1180, height: 780 } });
 const page = await context.newPage();
 
-// Sign in once; the session is in localStorage, so it survives the reloads.
 await page.goto(APP, { waitUntil: "networkidle" });
 const email = `daylight-${Date.now()}@example.com`;
 await page.getByLabel("Email").fill(email);
@@ -59,31 +56,46 @@ for (const line of seed) {
 }
 await page.locator(".status", { hasText: "Synced" }).waitFor({ timeout: 15_000 });
 
-for (const { label, time } of HOURS) {
-  // Fixing the clock before the reload means the provider computes the sun for
-  // that hour on first paint, rather than animating towards it.
-  await page.clock.install({ time: new Date(time) });
-  await page.reload({ waitUntil: "networkidle" });
-  await page.getByRole("heading", { name: "Today" }).waitFor({ timeout: 15_000 });
-  await page.waitForTimeout(400);
+for (const { label, mode, hour, weather } of SKIES) {
+  const readout = await page.evaluate(
+    ({ mode, hour, weather, day }) => {
+      const api = globalThis.diurnal;
+      api.setMode(mode);
+      api.setWeather(weather);
+      const when = new Date(`${day}T00:00:00`);
+      when.setHours(hour, 0, 0, 0);
+      const info = api.preview(when);
+      const style = getComputedStyle(document.documentElement);
+      return {
+        body: info.source.body,
+        alt: info.source.alt.toFixed(1),
+        dx: style.getPropertyValue("--dn-dx").trim(),
+        dy: style.getPropertyValue("--dn-dy").trim(),
+        blur: style.getPropertyValue("--dn-blur").trim(),
+        alpha: style.getPropertyValue("--dn-alpha").trim(),
+        theme: document.documentElement.dataset.dnTheme,
+      };
+    },
+    { mode, hour, weather, day: DAY },
+  );
 
-  const readout = await page.evaluate(() => {
-    const style = getComputedStyle(document.documentElement);
-    return {
-      scheme: document.documentElement.dataset.dnScheme,
-      shadowX: style.getPropertyValue("--dn-shadow-x").trim(),
-      shadowY: style.getPropertyValue("--dn-shadow-y").trim(),
-      length: style.getPropertyValue("--dn-shadow-length").trim(),
-      daylight: style.getPropertyValue("--dn-daylight").trim(),
-    };
-  });
+  // Give the theme crossfade and the shadow transition time to land.
+  await page.waitForTimeout(700);
+
   console.log(
-    `${label}  scheme=${readout.scheme}  shadow=(${readout.shadowX}, ${readout.shadowY})` +
-      `  length=${readout.length}  daylight=${readout.daylight}`,
+    `${label.padEnd(18)} ${readout.body.padEnd(5)} alt=${String(readout.alt).padStart(6)}` +
+      `  shadow=(${readout.dx}, ${readout.dy})  blur=${readout.blur}  alpha=${readout.alpha}` +
+      `  theme=${readout.theme}`,
   );
 
   await page.screenshot({ path: `${outDir}/diurnal-${label}.png` });
 }
+
+// Hand the page back to the real clock.
+await page.evaluate(() => {
+  globalThis.diurnal.preview(null);
+  globalThis.diurnal.setWeather("live");
+});
 
 await browser.close();
 console.log("done");
