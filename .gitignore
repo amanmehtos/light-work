@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.tsbuildinfo
+.DS_Store
+apps/desktop/src-tauri/target/
+build/
+*.local
+.env
+worker-configuration.d.ts
+.wrangler/

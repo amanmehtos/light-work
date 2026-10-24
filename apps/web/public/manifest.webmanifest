@@ -1,0 +1,10 @@
+{
+  "name": "Light Week",
+  "short_name": "Light Week",
+  "description": "Tasks, with focus as a first-class citizen.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#faf9f7",
+  "theme_color": "#faf9f7",
+  "icons": []
+}

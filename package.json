@@ -1,0 +1,33 @@
+{
+  "name": "light-suite",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Light Suite \u2014 intentional productivity tools. Light Week (tasks), Light Minute (focus), Light Year (review).",
+  "license": "MIT",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "test:e2e": "pnpm --filter @light/web test:e2e",
+    "dev:api": "pnpm --filter @light/api dev",
+    "dev:web": "pnpm --filter @light/web dev"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  }
+}

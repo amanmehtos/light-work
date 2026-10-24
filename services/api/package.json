@@ -1,0 +1,29 @@
+{
+  "name": "@light/api",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "wrangler types && tsc --noEmit",
+    "migrate:local": "wrangler d1 migrations apply light-week-auth --local",
+    "migrate:remote": "wrangler d1 migrations apply light-week-auth --remote"
+  },
+  "dependencies": {
+    "@cfworker/json-schema": "4.1.1",
+    "@light/core": "workspace:*",
+    "@light/mcp": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "hono": "4.13.13"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.7",
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.0",
+    "wrangler": "4.152.0"
+  }
+}

@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Unit and integration tests
+        # The API tests run in workerd against a real Durable Object and D1,
+        # so this covers the Workers runtime too.
+        run: pnpm -r test
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @light/web exec playwright install --with-deps chromium
+
+      - name: Start the API
+        working-directory: services/api
+        run: |
+          npx wrangler d1 migrations apply light-week-auth --local
+          echo 'DEV_LOGIN=1' > .dev.vars
+          npx wrangler dev --port 8787 --ip 127.0.0.1 &
+          until curl -sf http://127.0.0.1:8787/ >/dev/null; do sleep 1; done
+
+      - name: Start the web app
+        run: |
+          pnpm --filter @light/web dev --port 5173 --host 127.0.0.1 &
+          until curl -sf http://127.0.0.1:5173/ >/dev/null; do sleep 1; done
+
+      - name: End-to-end
+        run: pnpm --filter @light/web test:e2e

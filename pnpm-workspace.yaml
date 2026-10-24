@@ -1,0 +1,8 @@
+packages:
+  - packages/*
+  - services/*
+  - apps/web
+
+ignoredBuiltDependencies:
+  - esbuild
+  - workerd
