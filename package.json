@@ -14,7 +14,10 @@
     "typecheck": "pnpm -r typecheck",
     "test:e2e": "pnpm --filter @light/web test:e2e",
     "dev:api": "pnpm --filter @light/api dev",
-    "dev:web": "pnpm --filter @light/web dev"
+    "dev:web": "pnpm --filter @light/web dev",
+    "build:web": "pnpm --filter @light/web build",
+    "deploy": "pnpm build:web && pnpm --filter @light/api exec wrangler deploy",
+    "deploy:check": "pnpm build:web && pnpm --filter @light/api exec wrangler deploy --dry-run"
   },
   "devDependencies": {
     "typescript": "5.9.3",

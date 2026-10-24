@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "light-week-api",
+  "name": "light-week",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -20,10 +20,38 @@
     {
       "binding": "AUTH_DB",
       "database_name": "light-week-auth",
+      // Replace with the id printed by `wrangler d1 create light-week-auth`.
+      // The zeroes are a placeholder that works for local development only.
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
   ],
+
+  // The web app ships from this same Worker. Static assets are served by
+  // Cloudflare directly and are free and unmetered — only requests that
+  // actually invoke the Worker count against the quota — so one deployment
+  // costs nothing extra, needs no CORS, and leaves the app and the API on one
+  // origin. `run_worker_first` lists the paths the API owns; everything else
+  // falls through to the built SPA.
+  "assets": {
+    "directory": "../../apps/web/dist",
+    "not_found_handling": "single-page-application",
+    // Every exact path the API owns has to be listed as well as its subtree:
+    // `/sync/*` does NOT match `/sync` itself, and a POST that falls through
+    // to the asset server comes back 405.
+    "run_worker_first": [
+      "/auth/*",
+      "/sync",
+      "/sync/*",
+      "/account/*",
+      "/mcp",
+      "/mcp/*",
+      "/healthz"
+    ]
+  },
+
+  // Housekeeping: expire sessions and sign-in codes once a day.
+  "triggers": { "crons": ["0 4 * * *"] },
 
   "observability": { "enabled": true }
 }

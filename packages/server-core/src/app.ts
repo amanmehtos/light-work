@@ -55,14 +55,23 @@ export function createApp(context: AppOptions) {
     }),
   );
 
-  app.get("/", (c) =>
-    c.json({
-      name: "light-week-api",
-      protocol: PROTOCOL_VERSION,
-      platform: context.platform ?? "unknown",
-      docs: "https://github.com/amanmehtos/light-suite",
-    }),
-  );
+  const serviceInfo = () => ({
+    name: "light-week-api",
+    protocol: PROTOCOL_VERSION,
+    platform: context.platform ?? "unknown",
+    docs: "https://github.com/amanmehtos/light-suite",
+  });
+
+  app.get("/", (c) => c.json(serviceInfo()));
+
+  /**
+   * The same thing at a fixed path.
+   *
+   * In the combined deployment the web app owns `/`, so `/` returns the SPA's
+   * HTML rather than this. A health check needs somewhere that is the API
+   * whichever way the service is deployed.
+   */
+  app.get("/healthz", (c) => c.json({ ...serviceInfo(), ok: true }));
 
   /* ---------------------------------------------------------------- */
   /* auth                                                             */

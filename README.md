@@ -41,6 +41,7 @@ goes, not where you guessed it would.
   conflicts resolve, and what the free tier forced
 - [Sync protocol](docs/sync-protocol.md) — the wire format
 - [The MCP server](docs/mcp.md) — the tools an agent gets
+- [Going live](docs/going-live.md) — the deployment runbook
 - [Hosting on more than one cloud](docs/hosting.md) — the ports, and the AWS plan
 - [Diurnal UI](vendor/diurnal-ui/README.md) — the UI kit (upstream)
 - [Moving in from Todoist](docs/migrating-from-todoist.md)
@@ -106,8 +107,15 @@ pnpm --filter @light/web dev
 ```
 
 `DEV_LOGIN=1` hands the sign-in code back in the response, so there is no mail
-provider to configure before you can use it. See
-[docs/deploying.md](docs/deploying.md) for the real thing.
+provider to configure before you can use it.
+
+To ship it, see **[docs/going-live.md](docs/going-live.md)**. One Worker serves
+both the app and the API:
+
+```sh
+pnpm deploy:check   # build and validate, ship nothing
+pnpm deploy
+```
 
 ## License
 

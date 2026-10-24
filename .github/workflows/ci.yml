@@ -51,18 +51,31 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @light/web exec playwright install --with-deps chromium
 
-      - name: Start the API
+      # Deliberately the deployed shape — one Worker serving both the built app
+      # and the API from one origin — rather than the dev server with its /api
+      # proxy. The proxy forwards everything, so it cannot catch a path the
+      # asset router steals from the Worker; that is exactly how `POST /sync`
+      # once reached production config as a 405.
+      - name: Build the app
+        run: pnpm build:web
+
+      - name: Start the combined Worker
         working-directory: services/api
         run: |
           npx wrangler d1 migrations apply light-week-auth --local
           echo 'DEV_LOGIN=1' > .dev.vars
-          npx wrangler dev --port 8787 --ip 127.0.0.1 &
-          until curl -sf http://127.0.0.1:8787/ >/dev/null; do sleep 1; done
+          npx wrangler dev --port 8788 --ip 127.0.0.1 &
+          until curl -sf http://127.0.0.1:8788/healthz >/dev/null; do sleep 1; done
 
-      - name: Start the web app
+      - name: Check the app and the API share one origin
         run: |
-          pnpm --filter @light/web dev --port 5173 --host 127.0.0.1 &
-          until curl -sf http://127.0.0.1:5173/ >/dev/null; do sleep 1; done
+          curl -sf http://127.0.0.1:8788/healthz | grep -q light-week-api
+          curl -sf http://127.0.0.1:8788/ | grep -q "<!doctype html>"
+          # Any POST the asset router steals comes back 405 rather than 401.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8788/sync \
+            -H 'content-type: application/json' -d '{"version":1,"since":0,"ops":[]}')" = "401"
 
       - name: End-to-end
+        env:
+          APP_URL: http://127.0.0.1:8788
         run: pnpm --filter @light/web test:e2e
