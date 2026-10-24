@@ -12,6 +12,7 @@ import type {
   AccountStores,
   AuthStore,
   CompactionResult,
+  GoogleConfig,
   LoginCode,
   Mailer,
   MailResult,
@@ -220,6 +221,32 @@ export class ResendMailer implements Mailer {
     if (!response.ok) throw new Error(`mail delivery failed: ${response.status}`);
     return { delivered: true };
   }
+}
+
+/**
+ * Builds the Google OAuth config from the environment, or returns undefined
+ * when no client is configured — which is what keeps the routes unmounted and
+ * the button hidden rather than offering a sign-in that cannot complete.
+ *
+ * `origin` is where the Worker believes it is answering. That is right in
+ * production, where the Worker serves the app too, and wrong behind the dev
+ * server's `/api` proxy, which is what PUBLIC_URL and GOOGLE_REDIRECT_URI are
+ * for.
+ */
+export function googleFor(env: Env, origin: string): GoogleConfig | undefined {
+  const clientId = env.GOOGLE_CLIENT_ID;
+  const clientSecret = env.GOOGLE_CLIENT_SECRET;
+  if (clientId === undefined || clientId === "" || clientSecret === undefined || clientSecret === "") {
+    return undefined;
+  }
+
+  const appUrl = (env.PUBLIC_URL ?? origin).replace(/\/+$/, "");
+  return {
+    clientId,
+    clientSecret,
+    redirectUri: env.GOOGLE_REDIRECT_URI ?? `${appUrl}/auth/google/callback`,
+    appUrl,
+  };
 }
 
 /**

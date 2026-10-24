@@ -18,6 +18,15 @@ interface LightWeekSecrets {
   MAIL_FROM?: string;
   /** Public base URL, used in emails and OAuth metadata. */
   PUBLIC_URL?: string;
+  /** Google OAuth client. Both absent means Google sign-in is not offered. */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  /**
+   * Overrides the callback URL sent to Google. Needed only where the browser
+   * reaches the Worker by a different path than the Worker sees — behind the
+   * dev server's `/api` proxy, for instance.
+   */
+  GOOGLE_REDIRECT_URI?: string;
 }
 
 declare global {

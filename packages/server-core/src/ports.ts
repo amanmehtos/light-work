@@ -12,6 +12,7 @@
  */
 
 import type { Cursor, EntityKind, JsonObject, Op, PullResponse, PushResponse } from "@light/core";
+import type { GoogleConfig } from "./google.js";
 
 /* ------------------------------------------------------------------ */
 /* Account data                                                       */
@@ -149,6 +150,12 @@ export interface ServerContext {
   auth: AuthStore;
   realtime: Realtime;
   mailer: Mailer;
+  /**
+   * Google sign-in, when the deployment has an OAuth client configured.
+   * Absent means the routes are not mounted at all and the app offers only
+   * the email code, so a deployment never advertises a button that cannot work.
+   */
+  google?: GoogleConfig;
   /** Injectable for tests. */
   now?: () => number;
   /** Shown at the root endpoint, so a deployment can say where it runs. */

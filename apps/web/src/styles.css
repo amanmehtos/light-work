@@ -37,6 +37,25 @@ html, body, #root { height: 100%; }
 .signin-card h1 { margin: 0.25rem 0 0.5rem; }
 .signin-form { display: grid; gap: 0.875rem; margin-top: 1.25rem; }
 .signin-error { color: var(--dn-danger); }
+.signin-returning { margin-top: 1.25rem; color: var(--dn-muted); }
+
+/* Google's guidelines want their mark on a neutral surface, so this is a
+   plain button rather than dn-btn--primary, which is lit by the time of day. */
+.signin-google {
+  display: flex; align-items: center; justify-content: center; gap: 0.625rem;
+  text-decoration: none; background: var(--dn-surface); border: 1px solid var(--dn-line-strong);
+}
+.signin-google:hover { border-color: var(--dn-ink); }
+.signin-google-mark { flex: none; }
+
+/* A rule with the word sitting in a gap in it. */
+.signin-or {
+  display: flex; align-items: center; gap: 0.75rem;
+  color: var(--dn-muted); font-size: 0.8125rem;
+}
+.signin-or::before, .signin-or::after {
+  content: ""; flex: 1; height: 1px; background: var(--dn-line);
+}
 
 .dev-code { display: grid; gap: 0.25rem; }
 .dev-code strong { font-family: var(--dn-mono); letter-spacing: 0.12em; font-size: 1rem; }

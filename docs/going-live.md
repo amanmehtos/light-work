@@ -85,10 +85,48 @@ zeroes, then:
 npx wrangler d1 migrations apply light-week-auth --remote
 ```
 
-## 3. Email
+## 3. A way in
 
-**Without this nobody can sign in, including you.** There are no passwords —
-the only way into an account is a code sent by email.
+**Without one of these nobody can sign in, including you.** There are no
+passwords. Set up Google sign-in, or email codes, or both — they reach the same
+account, because both prove the same thing: that the person owns the address.
+
+### Google sign-in
+
+In the [Google Cloud console](https://console.cloud.google.com/apis/credentials):
+create a project, configure the OAuth consent screen (External, unless everyone
+signing in is in your Workspace), and create an **OAuth client ID** of type
+**Web application**. Add your URLs:
+
+| Field | Value |
+|---|---|
+| Authorised JavaScript origin | `https://<your-worker>.workers.dev` |
+| Authorised redirect URI | `https://<your-worker>.workers.dev/auth/google/callback` |
+
+Add a second redirect URI, `http://localhost:5173/api/auth/google/callback`, to
+use it in development too — the dev server proxies `/api` to the Worker, so the
+browser's callback URL differs from the one the Worker sees. Then:
+
+```sh
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+While the consent screen is in **Testing** only the accounts listed on it can
+sign in; publish it to open that up. The button appears by itself once both
+secrets are set — the server advertises the methods it has at `/healthz`, and
+the sign-in screen offers only those, so an unconfigured deployment never shows
+a button that cannot work.
+
+Locally, set the same two in `services/api/.dev.vars`, plus the two values the
+proxy makes ambiguous:
+
+```sh
+GOOGLE_REDIRECT_URI=http://localhost:5173/api/auth/google/callback
+PUBLIC_URL=http://localhost:5173
+```
+
+### Email codes
 
 Get a key from [Resend](https://resend.com) (free tier: 3,000 emails a month,
 100 a day), verify a sending domain, then:
@@ -112,7 +150,7 @@ From the repository root:
 
 ```sh
 pnpm install
-pnpm deploy
+pnpm run deploy
 ```
 
 That builds the web app and deploys one Worker serving both it and the API.

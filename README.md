@@ -109,12 +109,17 @@ pnpm --filter @light/web dev
 `DEV_LOGIN=1` hands the sign-in code back in the response, so there is no mail
 provider to configure before you can use it.
 
+Sign-in with Google sits alongside the email code and reaches the same account.
+It appears only where an OAuth client is configured — see
+**[docs/going-live.md](docs/going-live.md)** — so the dev loop above needs
+nothing extra.
+
 To ship it, see **[docs/going-live.md](docs/going-live.md)**. One Worker serves
 both the app and the API:
 
 ```sh
 pnpm deploy:check   # build and validate, ship nothing
-pnpm deploy
+pnpm run deploy     # `run` is required: `pnpm deploy` is pnpm's own command
 ```
 
 ## License

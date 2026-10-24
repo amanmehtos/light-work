@@ -14,13 +14,15 @@ import {
   D1AuthStore,
   DurableObjectAccountStores,
   DurableObjectRealtime,
+  googleFor,
   mailerFor,
 } from "./adapters.js";
 
 export { Account } from "./account.js";
 
-function appFor(env: Env) {
+function appFor(env: Env, origin: string) {
   const auth = new D1AuthStore(env.AUTH_DB);
+  const google = googleFor(env, origin);
   return {
     auth,
     app: createApp({
@@ -28,6 +30,7 @@ function appFor(env: Env) {
       auth,
       realtime: new DurableObjectRealtime(env.ACCOUNT),
       mailer: mailerFor(env),
+      ...(google !== undefined ? { google } : {}),
       platform: "cloudflare",
       // The SDK's default validator compiles schemas with `new Function`,
       // which Workers forbid.
@@ -38,7 +41,7 @@ function appFor(env: Env) {
 
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
-    return appFor(env).app.fetch(request, env, ctx);
+    return appFor(env, new URL(request.url).origin).app.fetch(request, env, ctx);
   },
 
   /** Housekeeping: expire sessions and sign-in codes. Wire to a cron trigger. */

@@ -89,6 +89,13 @@ function describeError(code: string): string {
       return "Too many incorrect attempts. Ask for a new code.";
     case "mismatch":
       return "That code is not right.";
+    case "access_denied":
+      return "Google sign-in was cancelled.";
+    case "bad_state":
+      return "That sign-in attempt expired. Try again.";
+    case "missing_code":
+    case "google_sign_in_failed":
+      return "Google sign-in did not complete. Try again.";
     default:
       return code;
   }
@@ -105,6 +112,73 @@ export async function verifyCode(email: string, code: string): Promise<StoredSes
     device: navigator.userAgent,
   });
   const session = { token: result.token, user: result.user };
+  saveSession(session);
+  return session;
+}
+
+/** Where the browser goes to start Google sign-in. A full navigation, not fetch. */
+export const GOOGLE_START_URL = `${API_BASE}/auth/google/start`;
+
+/** Whether this deployment has a Google OAuth client configured. */
+export async function signInMethods(): Promise<{ google: boolean }> {
+  try {
+    const response = await fetch(`${API_BASE}/healthz`);
+    if (!response.ok) return { google: false };
+    const info = (await response.json()) as { auth?: { google?: boolean } };
+    return { google: info.auth?.google === true };
+  } catch {
+    // Offline, or the API is down. The email form still renders and will
+    // report its own failure, which is a better first impression than an
+    // error page before anything has been tried.
+    return { google: false };
+  }
+}
+
+/**
+ * What the Google callback left in the fragment, taken once at module load.
+ *
+ * Reading it clears it, so it is a one-shot resource, and StrictMode mounts
+ * every effect twice in development: consuming it inside the effect means the
+ * first pass takes the token and the second finds an empty fragment, and
+ * whichever of the two React keeps is the one holding nothing. Taking it here,
+ * before anything renders, makes the effect idempotent and the two
+ * environments behave the same.
+ */
+const redirect: { token: string | null; error: string | null } | null = takeRedirectFragment();
+
+function takeRedirectFragment(): { token: string | null; error: string | null } | null {
+  const hash = window.location.hash.replace(/^#/, "");
+  if (hash === "") return null;
+
+  const params = new URLSearchParams(hash);
+  const token = params.get("token");
+  const error = params.get("error");
+  if (token === null && error === null) return null;
+
+  // Cleared whatever it held, so a reload cannot replay a stale token and the
+  // address bar is not left carrying one.
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return { token, error };
+}
+
+/** Whether this load is a return trip from the identity provider. */
+export function hasRedirectSignIn(): boolean {
+  return redirect !== null;
+}
+
+/** Completes a Google sign-in from what the callback redirected with. */
+export async function completeRedirectSignIn(): Promise<StoredSession | null> {
+  if (redirect === null) return null;
+  if (redirect.token === null) throw new Error(describeError(redirect.error ?? "unknown"));
+
+  // The callback hands over a token but not the user; fetch it so the stored
+  // session has the same shape the code path produces.
+  const response = await fetch(`${API_BASE}/account/me`, {
+    headers: { Authorization: `Bearer ${redirect.token}` },
+  });
+  if (!response.ok) throw new Error("That sign-in did not complete. Try again.");
+
+  const session = { token: redirect.token, user: (await response.json()) as User };
   saveSession(session);
   return session;
 }

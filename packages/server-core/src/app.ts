@@ -12,13 +12,16 @@ import { cors } from "hono/cors";
 import { PROTOCOL_VERSION, type Op } from "@light/core";
 import type { jsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/index.js";
 import {
+  createSession,
   deliverCode,
+  findOrCreateUser,
   isValidEmail,
   issueLoginCode,
   resolveSession,
   revokeSession,
   verifyLoginCode,
 } from "./auth.js";
+import { authorizeUrl, exchangeCode, verifyState } from "./google.js";
 import { handleMcpRequest } from "./mcp.js";
 import type { ResolvedSession, ServerContext } from "./ports.js";
 
@@ -60,6 +63,10 @@ export function createApp(context: AppOptions) {
     protocol: PROTOCOL_VERSION,
     platform: context.platform ?? "unknown",
     docs: "https://github.com/amanmehtos/light-work",
+    // Which ways in this deployment actually has, so the sign-in screen can
+    // offer a Google button only where one is configured rather than showing
+    // a control that fails when pressed.
+    auth: { code: true, google: context.google !== undefined },
   });
 
   app.get("/", (c) => c.json(serviceInfo()));
@@ -116,6 +123,55 @@ export function createApp(context: AppOptions) {
     }
     return c.json({ token: result.token, user: result.user });
   });
+
+  /* ---------------------------------------------------------------- */
+  /* sign in with Google                                              */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Mounted only when an OAuth client is configured, so an unconfigured
+   * deployment answers 404 rather than 500.
+   */
+  if (context.google !== undefined) {
+    const google = context.google;
+
+    app.get("/auth/google/start", async (c) => c.redirect(await authorizeUrl(google, now()), 302));
+
+    app.get("/auth/google/callback", async (c) => {
+      /** Back to the sign-in screen with something the user can act on. */
+      const failed = (reason: string) =>
+        c.redirect(`${google.appUrl}/#error=${encodeURIComponent(reason)}`, 302);
+
+      // Google reports a refused consent screen this way, not as an error.
+      const denied = c.req.query("error");
+      if (denied !== undefined) return failed(denied);
+
+      const code = c.req.query("code");
+      const state = c.req.query("state");
+      if (code === undefined || state === undefined) return failed("missing_code");
+      if (!(await verifyState(google, state, now()))) return failed("bad_state");
+
+      let identity;
+      try {
+        identity = await exchangeCode(google, code, now());
+      } catch {
+        // The detail belongs in the logs, not in a URL the user is about to
+        // land on: a failure here is a setup problem, not something they can fix.
+        return failed("google_sign_in_failed");
+      }
+
+      // Same account as the email code would reach. Google has proved the
+      // address, which is exactly what a sign-in code proves, so the two routes
+      // converge on one user rather than creating a second account per method.
+      const user = await findOrCreateUser(context.auth, identity.email, now());
+      const token = await createSession(context.auth, user.id, c.req.header("User-Agent") ?? "", now());
+
+      // The fragment, never the query string: it is not sent to any server and
+      // stays out of access logs and Referer headers. The app consumes it and
+      // scrubs it from the address bar on arrival.
+      return c.redirect(`${google.appUrl}/#token=${encodeURIComponent(token)}`, 302);
+    });
+  }
 
   /* ---------------------------------------------------------------- */
   /* everything below needs a session                                 */
