@@ -3,34 +3,70 @@
 Roughly forty minutes, most of it waiting for DNS. Everything below fits inside
 Cloudflare's free plan.
 
-## Before anything else: get the code out of the container
+## 0. The code is on GitHub
 
-**This is the only hard blocker, and nothing else can happen until it is done.**
-
-The repository exists in a cloud container that is reclaimed after a period of
-inactivity, and it has never been pushed. There are five commits and one
-submodule, and if the container goes away so do they.
-
-1. Connect GitHub at <https://claude.ai/connect-github>, and install the Claude
-   GitHub App on a new empty `light-suite` repository.
-2. Start a session with that repository selected.
-3. Push:
-
-   ```sh
-   git remote add origin git@github.com:amanmehtos/light-suite.git
-   git push -u origin main
-   ```
-
-Check that `vendor/diurnal-ui` came through as a submodule pointer rather than
-as files — `git submodule status` should name a commit of `diurnal-ui`.
-
-## 1. Cloudflare
+It lives at <https://github.com/amanmehtos/light-work>. Clone it with its
+submodule, which carries Diurnal UI:
 
 ```sh
-npx wrangler login
+git clone --recurse-submodules git@github.com:amanmehtos/light-work.git
+cd light-work
+pnpm install
+pnpm -r test          # 245 passing
+```
+
+An existing clone that predates the submodule needs
+`git submodule update --init`.
+
+## 1. Wrangler and Cloudflare
+
+Wrangler authenticates two ways, and you want both: interactive for your own
+machine, an API token for CI.
+
+### On your machine
+
+```sh
+npx wrangler login     # opens a browser, stores an OAuth token
+npx wrangler whoami    # confirm the account it picked
 ```
 
 A free account is enough. Nothing below needs a paid plan.
+
+If the login shows more than one account, add the right one to
+`wrangler.jsonc` as `"account_id": "..."` so deploys cannot land in the wrong
+place.
+
+### For CI
+
+`wrangler login` cannot work in a runner, so CI uses an account-owned API
+token through environment variables. Create it at **My Profile → API Tokens →
+Create Token**, starting from the **Edit Cloudflare Workers** template, and add
+**Account → D1 → Edit** so the workflow can apply migrations.
+
+| Permission | Why |
+| --- | --- |
+| Account → Workers Scripts → Edit | Deploying the Worker (covered by the template) |
+| Account → D1 → Edit | `wrangler d1 migrations apply --remote` |
+| Zone → Workers Routes → Edit | Only if you attach a custom domain on a zone |
+
+Durable Objects have no separate permission of their own; the Workers template
+covers them. If a deploy fails with a permissions error naming a product, add
+that product's Edit permission and try again — the error says which.
+
+Then add two repository secrets under **Settings → Secrets and variables →
+Actions**:
+
+- `CLOUDFLARE_API_TOKEN` — the token above
+- `CLOUDFLARE_ACCOUNT_ID` — from the dashboard sidebar, or `wrangler whoami`
+
+Optionally add a repository **variable** `PUBLIC_URL` (e.g.
+`https://lightweek.app`), and the deploy workflow will curl `/healthz`
+afterwards to prove the release is alive.
+
+With those set, `.github/workflows/deploy.yml` deploys on every push to `main`:
+it checks the token, builds the app, applies migrations, deploys, and smokes
+the result. Migrations run *before* the deploy so a failed one blocks the
+release rather than shipping code against the old schema.
 
 ## 2. The database
 

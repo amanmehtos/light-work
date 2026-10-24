@@ -59,7 +59,7 @@ export function createApp(context: AppOptions) {
     name: "light-week-api",
     protocol: PROTOCOL_VERSION,
     platform: context.platform ?? "unknown",
-    docs: "https://github.com/amanmehtos/light-suite",
+    docs: "https://github.com/amanmehtos/light-work",
   });
 
   app.get("/", (c) => c.json(serviceInfo()));
