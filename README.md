@@ -27,6 +27,11 @@ goes, not where you guessed it would.
 - **One SQLite Durable Object per user** is the authoritative store. D1 holds only
   global auth rows. This keeps the hot write path off D1's free-tier row-write quota
   and gives each account strong consistency and a free WebSocket fanout.
+- **The cloud sits behind four ports.** Cloudflare is the only deployed target, but
+  the server itself has no knowledge of it — one conformance suite runs against
+  three backends, and the whole API runs in plain Node with no cloud account.
+- **The interface is lit by the time of day.** [Diurnal](packages/diurnal) treats the
+  page as a surface and derives every shadow from where the sun actually is.
 
 ## Documentation
 
@@ -34,6 +39,8 @@ goes, not where you guessed it would.
   conflicts resolve, and what the free tier forced
 - [Sync protocol](docs/sync-protocol.md) — the wire format
 - [The MCP server](docs/mcp.md) — the tools an agent gets
+- [Hosting on more than one cloud](docs/hosting.md) — the ports, and the AWS plan
+- [Diurnal](packages/diurnal/README.md) — the UI kit
 - [Moving in from Todoist](docs/migrating-from-todoist.md)
 - [Deploying](docs/deploying.md)
 
@@ -45,8 +52,10 @@ goes, not where you guessed it would.
 | `packages/client-sdk` | Local store, sync client, recurrence, domain operations | 34 tests |
 | `packages/todoist-import` | Todoist → Light Week migration, with a CLI | 49 tests |
 | `packages/mcp` | MCP tools, stdio server, session | 30 tests |
-| `services/api` | Hono Worker, per-account Durable Object, auth, hosted MCP | 34 tests in workerd |
-| `apps/web` | React PWA | 24 end-to-end checks in a browser |
+| `packages/diurnal` | The UI kit: light from the time of day | 34 tests |
+| `packages/server-core` | The server, with the cloud behind four ports | 50 tests, no cloud needed |
+| `services/api` | Cloudflare adapters: Durable Object, D1, sockets | 34 tests in workerd |
+| `apps/web` | React PWA, built on Diurnal | 24 end-to-end checks in a browser |
 | `apps/desktop` | Tauri shell | written, never compiled |
 | `apps/ios` | LightKit — the Light Minute bridge | written, never compiled |
 
@@ -62,6 +71,8 @@ Not done yet, in rough order of what is missing most:
   none of it has been compiled. See its README.
 - **The desktop build.** The Tauri configuration is written but has never been
   run.
+- **AWS.** The ports are in place and the mapping is written up, but no AWS
+  adapter is built — see [docs/hosting.md](docs/hosting.md).
 - **Sharing.** Projects are single-user; the schema has the fields but nothing
   uses them.
 - **OAuth for MCP.** The endpoint takes a session token today, which means

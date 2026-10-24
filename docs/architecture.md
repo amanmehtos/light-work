@@ -23,6 +23,19 @@
 Every client keeps a full local copy of the account and answers reads from it.
 Nothing in the interaction path waits on the network.
 
+## Where the cloud lives
+
+The server is `packages/server-core`: routing, auth, sync and MCP, with no
+knowledge of any cloud. It reaches the outside world through four ports —
+`AccountStore`, `AuthStore`, `Realtime`, `Mailer` — and
+`services/api/src/adapters.ts` is the only file in the deployment that knows it
+is on Cloudflare.
+
+That is not architecture for its own sake. One suite runs against three
+backends, which is what keeps the ports honest, and the whole API runs in plain
+Node for tests and local work. [docs/hosting.md](hosting.md) covers what a new
+backend has to guarantee and what AWS would look like.
+
 ## Why a Durable Object holds the data, not D1
 
 This is the load-bearing decision, and it is driven by the free tier.

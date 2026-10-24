@@ -62,6 +62,18 @@ curl -s localhost:8787/auth/verify-code \
 # -> {"token":"...","user":{...}}
 ```
 
+## Running it with no cloud at all
+
+The server has no Cloudflare in it — that lives in `services/api/src/adapters.ts`.
+With the in-memory and `node:sqlite` adapters the whole API runs in plain Node,
+which is the fastest way to work on anything above the ports:
+
+```sh
+pnpm --filter @light/server-core test   # about a second, no workerd
+```
+
+See [hosting.md](hosting.md).
+
 ## Tests
 
 ```sh
