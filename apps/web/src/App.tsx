@@ -1,5 +1,16 @@
 import { useMemo, useState } from "react";
 import { compareOrder, type Task } from "@light/core";
+import {
+  Button,
+  Chip,
+  DiurnalProvider,
+  Heading,
+  Panel,
+  Stack,
+  SunDial,
+  Surface,
+  Text,
+} from "@light/diurnal";
 import { loadSession, logout, type StoredSession } from "./auth.js";
 import { useLightWeek } from "./store-hook.js";
 import { AddTask, type ParsedEntry } from "./components/AddTask.js";
@@ -9,21 +20,29 @@ import { TaskRow } from "./components/TaskRow.js";
 
 function todayISO(): string {
   // Local calendar day, which is what "Today" has to mean to a user.
-  const now = new Date();
   return new Intl.DateTimeFormat("en-CA", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(now);
+  }).format(new Date());
 }
 
 export function App() {
   const [session, setSession] = useState<StoredSession | null>(() => loadSession());
 
-  if (session === null) {
-    return <SignIn onSignedIn={setSession} />;
-  }
-  return <Workspace session={session} onSignOut={() => setSession(null)} />;
+  return (
+    // The sun drives the whole page: shadow direction, shadow length, and
+    // whether the palette is the daytime or the night one.
+    <DiurnalProvider>
+      <Surface>
+        {session === null ? (
+          <SignIn onSignedIn={setSession} />
+        ) : (
+          <Workspace session={session} onSignOut={() => setSession(null)} />
+        )}
+      </Surface>
+    </DiurnalProvider>
+  );
 }
 
 function Workspace({
@@ -141,9 +160,7 @@ function Workspace({
     // Moving down means landing after the sibling currently below; moving up
     // means landing after the one two places above, or at the head.
     const afterId =
-      direction === 1
-        ? siblings[targetIndex]!.id
-        : (siblings[targetIndex - 1]?.id ?? null);
+      direction === 1 ? siblings[targetIndex]!.id : (siblings[targetIndex - 1]?.id ?? null);
 
     try {
       commit(ops.reorderTask(task.id, afterId).ops);
@@ -153,9 +170,10 @@ function Workspace({
     }
   }
 
+  const project = view.kind === "project" ? store.get("project", view.projectId) : null;
   const heading =
     view.kind === "project"
-      ? (store.get("project", view.projectId)?.name ?? "Project")
+      ? (project?.name ?? "Project")
       : view.kind === "today"
         ? "Today"
         : view.kind === "upcoming"
@@ -164,79 +182,90 @@ function Workspace({
             ? "Completed"
             : "All tasks";
 
+  const statusTone = status.state === "offline" || status.state === "error" ? "danger" : "neutral";
+
   return (
     <div className="app">
-      <header className="topbar">
-        <strong>Light Week</strong>
-        <span className={`status ${status.state}`}>
+      <Panel level={1.2} flush className="topbar" role="banner">
+        <SunDial />
+        <Heading level={2}>Light Week</Heading>
+        <Chip tone={statusTone} className={`status ${status.state}`}>
           {status.state === "syncing" && "Syncing…"}
           {status.state === "idle" && (status.pending > 0 ? `${status.pending} queued` : "Synced")}
           {status.state === "offline" && "Offline — changes are saved locally"}
           {status.state === "error" && (status.lastError ?? "Sync problem")}
-        </span>
+        </Chip>
         <span className="spacer" />
-        <span className="muted small">{session.user.email}</span>
-        <button
-          className="link"
+        <Text tone="soft" size="small">
+          {session.user.email}
+        </Text>
+        <Button
+          variant="ghost"
           onClick={() => {
             void logout(session.token).then(onSignOut);
           }}
         >
           Sign out
-        </button>
-      </header>
+        </Button>
+      </Panel>
 
       {error !== null && (
-        <p role="alert" className="banner">
-          {error}
-        </p>
+        <Panel inset role="alert" className="banner">
+          <Text size="small">{error}</Text>
+        </Panel>
       )}
 
       <div className="body">
-        <Sidebar store={store} view={view} onSelect={setView} counts={counts} />
+        <Panel level={0.8} flush className="sidebar-panel">
+          <Sidebar store={store} view={view} onSelect={setView} counts={counts} />
+        </Panel>
 
-        <main className="content">
-          <h1>{heading}</h1>
+        <main className="main-column">
+          <Stack gap={4}>
+            <Stack gap={1}>
+              <Heading level={1}>{heading}</Heading>
+              {project !== null && project.description !== "" && (
+                <Text tone="soft" as="p" className="project-description">
+                  {project.description}
+                </Text>
+              )}
+            </Stack>
 
-          {view.kind === "project" &&
-            store.get("project", view.projectId)?.description !== "" && (
-              <p className="project-description">
-                {store.get("project", view.projectId)?.description}
-              </p>
+            <AddTask onAdd={addTask} disabled={!ready} />
+
+            {!ready ? (
+              <Text tone="soft" className="pad">
+                Loading your tasks…
+              </Text>
+            ) : visible.length === 0 ? (
+              <Text tone="soft" className="pad">
+                {view.kind === "today"
+                  ? "Nothing due today."
+                  : view.kind === "upcoming"
+                    ? "Nothing scheduled ahead."
+                    : view.kind === "completed"
+                      ? "Nothing finished yet."
+                      : "No tasks here yet."}
+              </Text>
+            ) : (
+              <ul className="tasks">
+                {visible.map((task) => (
+                  <TaskRow
+                    key={task.id}
+                    task={task}
+                    store={store}
+                    ops={ops}
+                    today={today}
+                    selected={selectedId === task.id}
+                    onComplete={() => complete(task)}
+                    onSelect={() => setSelectedId(selectedId === task.id ? null : task.id)}
+                    onMoveUp={() => move(task, -1)}
+                    onMoveDown={() => move(task, 1)}
+                  />
+                ))}
+              </ul>
             )}
-
-          <AddTask onAdd={addTask} disabled={!ready} />
-
-          {!ready ? (
-            <p className="muted pad">Loading your tasks…</p>
-          ) : visible.length === 0 ? (
-            <p className="muted pad">
-              {view.kind === "today"
-                ? "Nothing due today."
-                : view.kind === "upcoming"
-                  ? "Nothing scheduled ahead."
-                  : view.kind === "completed"
-                    ? "Nothing finished yet."
-                    : "No tasks here yet."}
-            </p>
-          ) : (
-            <ul className="tasks">
-              {visible.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  store={store}
-                  ops={ops}
-                  today={today}
-                  selected={selectedId === task.id}
-                  onComplete={() => complete(task)}
-                  onSelect={() => setSelectedId(selectedId === task.id ? null : task.id)}
-                  onMoveUp={() => move(task, -1)}
-                  onMoveDown={() => move(task, 1)}
-                />
-              ))}
-            </ul>
-          )}
+          </Stack>
         </main>
       </div>
     </div>

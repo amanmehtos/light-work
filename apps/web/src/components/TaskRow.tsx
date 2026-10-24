@@ -1,15 +1,25 @@
 /**
- * One task.
+ * One task, as a card resting on the desk.
  *
- * Shows the two date fields distinctly, because conflating "when I'll work on
- * it" with "when it's owed" is the main way a Todoist clone loses information
- * the user put in deliberately.
+ * Each row is its own low panel rather than a line in a list, because that is
+ * what makes Diurnal visible: a dozen cards all throwing the same shadow in
+ * the same direction reads as objects on a surface, which a bordered list does
+ * not. The elevation is kept low so a long list does not turn into soup.
  */
 
 import type { Label, Task } from "@light/core";
 import type { LightStore, Operations } from "@light/client-sdk";
+import { Button, Checkbox, Chip, Inline, Panel, Text } from "@light/diurnal";
 
-const PRIORITY_LABEL = ["", "Urgent", "High", "Medium", "None"];
+/** `r g b` triples, matching the priority colours in the stylesheet. */
+const PRIORITY_TINT: Record<number, string | undefined> = {
+  1: "192 57 43",
+  2: "204 122 40",
+  3: "63 124 172",
+  4: undefined,
+};
+
+const PRIORITY_NAME = ["", "Urgent", "High", "Medium", "None"];
 
 function humanDuration(seconds: number): string {
   const minutes = Math.round(seconds / 60);
@@ -62,70 +72,77 @@ export function TaskRow({
   const overdue = task.due !== null && task.due.date.slice(0, 10) < today;
 
   return (
-    <li className={selected ? "task selected" : "task"}>
-      <input
-        type="checkbox"
-        className={`check p${task.priority}`}
-        checked={task.isCompleted}
-        aria-label={`Complete ${task.content}`}
-        onChange={onComplete}
-      />
+    <li>
+      {/* Selecting a task lifts it off the desk. */}
+      <Panel level={selected ? 1.6 : 0.6} flush className={selected ? "task selected" : "task"}>
+        <Checkbox
+          tint={PRIORITY_TINT[task.priority]}
+          checked={task.isCompleted}
+          aria-label={`Complete ${task.content}`}
+          onChange={onComplete}
+        />
 
-      <button className="task-body" onClick={onSelect}>
-        <span className={task.isCompleted ? "title done" : "title"}>{task.content}</span>
+        <button className="task-body" onClick={onSelect}>
+          <Text className="title" strike={task.isCompleted}>
+            {task.content}
+          </Text>
 
-        <span className="meta">
-          {task.priority < 4 && (
-            <span className={`chip priority p${task.priority}`}>
-              p{task.priority} {PRIORITY_LABEL[task.priority]}
-            </span>
+          <Inline gap={1} className="meta">
+            {task.priority < 4 && (
+              <Chip tint={PRIORITY_TINT[task.priority]}>
+                p{task.priority} {PRIORITY_NAME[task.priority]}
+              </Chip>
+            )}
+
+            {task.due !== null && (
+              <Chip tone={overdue ? "danger" : "neutral"}>
+                {formatDay(task.due.date, today)}
+                {task.due.isRecurring && <span title={task.due.text ?? ""}>↻</span>}
+              </Chip>
+            )}
+
+            {/* Outlined, so a deadline never reads as the same kind of thing
+                as the due date sitting next to it. */}
+            {task.deadline !== null && (
+              <Chip tone="outline" title="Deadline — when this is actually owed">
+                due by {formatDay(task.deadline.date, today)}
+              </Chip>
+            )}
+
+            {task.duration !== null && (
+              <Chip>
+                {task.duration.amount}
+                {task.duration.unit === "minute" ? "m" : "d"}
+              </Chip>
+            )}
+
+            {labels.map((label) => (
+              <Chip key={label.id}>@{label.name}</Chip>
+            ))}
+
+            {focus.sessions > 0 && (
+              <Chip tone="accent" title={`${focus.sessions} focus session(s)`}>
+                ◴ {humanDuration(focus.focusedSeconds)}
+              </Chip>
+            )}
+          </Inline>
+
+          {task.description !== "" && (
+            <Text tone="soft" size="small" className="description">
+              {task.description}
+            </Text>
           )}
+        </button>
 
-          {task.due !== null && (
-            <span className={overdue ? "chip due overdue" : "chip due"}>
-              {formatDay(task.due.date, today)}
-              {task.due.isRecurring && <span className="recurring" title={task.due.text ?? ""}> ↻</span>}
-            </span>
-          )}
-
-          {/* Deliberately distinct from the due date. */}
-          {task.deadline !== null && (
-            <span className="chip deadline" title="Deadline — when this is actually owed">
-              due by {formatDay(task.deadline.date, today)}
-            </span>
-          )}
-
-          {task.duration !== null && (
-            <span className="chip">
-              {task.duration.amount}
-              {task.duration.unit === "minute" ? "m" : "d"}
-            </span>
-          )}
-
-          {labels.map((label) => (
-            <span key={label.id} className="chip label">
-              @{label.name}
-            </span>
-          ))}
-
-          {focus.sessions > 0 && (
-            <span className="chip focus" title={`${focus.sessions} focus session(s)`}>
-              ◴ {humanDuration(focus.focusedSeconds)}
-            </span>
-          )}
+        <span className="reorder">
+          <Button variant="quiet" aria-label={`Move ${task.content} up`} onClick={onMoveUp}>
+            ↑
+          </Button>
+          <Button variant="quiet" aria-label={`Move ${task.content} down`} onClick={onMoveDown}>
+            ↓
+          </Button>
         </span>
-
-        {task.description !== "" && <span className="description">{task.description}</span>}
-      </button>
-
-      <span className="reorder">
-        <button aria-label={`Move ${task.content} up`} onClick={onMoveUp}>
-          ↑
-        </button>
-        <button aria-label={`Move ${task.content} down`} onClick={onMoveDown}>
-          ↓
-        </button>
-      </span>
+      </Panel>
     </li>
   );
 }

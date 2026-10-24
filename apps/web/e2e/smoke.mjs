@@ -104,7 +104,7 @@ try {
   console.log("projects");
   check(
     "a project was created to hold the first task",
-    (await page.locator(".sidebar .nav-item", { hasText: "Inbox" }).count()) > 0,
+    (await page.getByRole("button", { name: /^Inbox/ }).count()) > 0,
   );
 
   console.log("add a second task and reorder");
@@ -153,7 +153,7 @@ try {
   check("the completed task is listed under Completed", await done.isVisible());
   check(
     "it is shown as struck through",
-    (await page.locator(".task .title.done").count()) >= 1,
+    (await page.locator(".task .title.dn-text-strike").count()) >= 1,
   );
 
   check("the page logged no errors", consoleErrors.length === 0, consoleErrors.join(" | "));

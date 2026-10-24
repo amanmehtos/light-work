@@ -1,0 +1,450 @@
+/*
+ * Diurnal.
+ *
+ * The page is a surface. Things sit on it at a height, and a light source —
+ * whose position comes from the actual time of day — throws their shadows
+ * across it. One shadow expression, `.dn-raised`, serves every component: each
+ * declares how high it sits with `--dn-e`, and the light does the rest.
+ *
+ * Every custom property beginning `--dn-shadow`, `--dn-light`, `--dn-warmth`
+ * or `--dn-daylight` is written by the JavaScript at runtime. The values here
+ * are the fallback for a server render or a page with scripting off: a neutral
+ * mid-morning.
+ *
+ * Text and background contrast never varies with the sun. The palette has two
+ * states, light and dark, and only the lighting is continuous — a theme that
+ * drifts all day is an excellent way to produce something unreadable by
+ * mid-afternoon.
+ */
+
+:root {
+  /* --- written at runtime ------------------------------------------ */
+  --dn-shadow-x: -0.4;
+  --dn-shadow-y: 0.7;
+  --dn-shadow-length: 7px;
+  --dn-shadow-blur: 10px;
+  --dn-shadow-alpha: 0.18;
+  --dn-contact-alpha: 0.07;
+  --dn-light-x: 0.4;
+  --dn-light-y: -1;
+  --dn-highlight-alpha: 0.1;
+  --dn-warmth: 0.2;
+  --dn-daylight: 1;
+  --dn-altitude: 0.6;
+  --dn-lateral: -0.4;
+
+  /* Warm and cool are taken separately so the sign can drive two layers;
+     CSS has no way to branch on it. */
+  --dn-warm: max(var(--dn-warmth), 0);
+  --dn-cool: max(calc(-1 * var(--dn-warmth)), 0);
+
+  /* --- shape -------------------------------------------------------- */
+  --dn-radius-sm: 6px;
+  --dn-radius: 10px;
+  --dn-radius-lg: 16px;
+  --dn-radius-pill: 999px;
+
+  --dn-space-1: 4px;
+  --dn-space-2: 8px;
+  --dn-space-3: 12px;
+  --dn-space-4: 16px;
+  --dn-space-5: 24px;
+  --dn-space-6: 32px;
+
+  --dn-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  --dn-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --dn-amber: 214 142 68;
+  --dn-dusk: 94 118 170;
+
+  /* How long the light takes to catch up when the hour changes. Slow, because
+     this should be noticed in passing rather than watched. */
+  --dn-transition: 1200ms;
+}
+
+/* --- palettes ------------------------------------------------------- */
+
+:root,
+[data-dn-scheme="light"] {
+  --dn-ground: 247 245 241;
+  --dn-surface: 255 255 255;
+  --dn-surface-sunk: 240 237 231;
+  --dn-line: 226 221 212;
+  --dn-ink: 32 30 27;
+  --dn-ink-soft: 108 101 92;
+  --dn-accent: 176 84 44;
+  --dn-accent-ink: 255 255 255;
+  --dn-accent-wash: 245 233 225;
+  --dn-danger: 176 38 30;
+  --dn-shadow-rgb: 56 46 34;
+  --dn-highlight-rgb: 255 255 255;
+}
+
+[data-dn-scheme="dark"] {
+  --dn-ground: 20 19 17;
+  --dn-surface: 32 30 27;
+  --dn-surface-sunk: 25 24 21;
+  --dn-line: 56 52 46;
+  --dn-ink: 238 235 229;
+  --dn-ink-soft: 158 150 139;
+  --dn-accent: 226 142 97;
+  --dn-accent-ink: 28 18 12;
+  --dn-accent-wash: 54 38 29;
+  --dn-danger: 232 105 92;
+  --dn-shadow-rgb: 0 0 0;
+  --dn-highlight-rgb: 255 255 255;
+}
+
+/* Before the script runs, follow the system rather than flashing the wrong
+   palette at someone working at night. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-dn-scheme]) {
+    --dn-ground: 20 19 17;
+    --dn-surface: 32 30 27;
+    --dn-surface-sunk: 25 24 21;
+    --dn-line: 56 52 46;
+    --dn-ink: 238 235 229;
+    --dn-ink-soft: 158 150 139;
+    --dn-accent: 226 142 97;
+    --dn-accent-ink: 28 18 12;
+    --dn-accent-wash: 54 38 29;
+    --dn-danger: 232 105 92;
+    --dn-shadow-rgb: 0 0 0;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--dn-font);
+  font-size: 15px;
+  line-height: 1.5;
+  color: rgb(var(--dn-ink));
+  background: rgb(var(--dn-ground));
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- the ground ----------------------------------------------------- */
+
+/*
+ * The desktop itself is lit from wherever the sun is, so the page has a bright
+ * side. It is very faint on purpose — enough to feel, not enough to notice.
+ */
+.dn-surface {
+  position: relative;
+  min-height: 100%;
+  background-color: rgb(var(--dn-ground));
+  background-image:
+    radial-gradient(
+      130% 100% at calc(50% + var(--dn-lateral) * 45%) -15%,
+      rgb(var(--dn-highlight-rgb) / calc(var(--dn-daylight) * 0.5)),
+      transparent 58%
+    ),
+    linear-gradient(rgb(var(--dn-amber) / calc(var(--dn-warm) * 0.07)), rgb(var(--dn-amber) / calc(var(--dn-warm) * 0.07))),
+    linear-gradient(rgb(var(--dn-dusk) / calc(var(--dn-cool) * 0.08)), rgb(var(--dn-dusk) / calc(var(--dn-cool) * 0.08)));
+  transition: background-color var(--dn-transition) linear;
+}
+
+/* --- elevation ------------------------------------------------------ */
+
+/*
+ * The one expression everything else leans on.
+ *
+ * Two shadows: a tight contact shadow that keeps an object attached to the
+ * surface at any sun angle, and the cast shadow that stretches and swings
+ * through the day. The inset highlight picks out the edge facing the light.
+ */
+.dn-raised {
+  --dn-e: 1;
+  box-shadow:
+    inset calc(var(--dn-light-x) * -1px) 1px 0
+      rgb(var(--dn-highlight-rgb) / var(--dn-highlight-alpha)),
+    0 calc(var(--dn-e) * 1px) calc(var(--dn-e) * 2px)
+      rgb(var(--dn-shadow-rgb) / var(--dn-contact-alpha)),
+    calc(var(--dn-shadow-x) * var(--dn-shadow-length) * var(--dn-e))
+      calc(var(--dn-shadow-y) * var(--dn-shadow-length) * var(--dn-e))
+      calc(var(--dn-shadow-blur) * var(--dn-e))
+      rgb(var(--dn-shadow-rgb) / var(--dn-shadow-alpha));
+  transition:
+    box-shadow var(--dn-transition) linear,
+    background-color 200ms ease,
+    transform 120ms ease;
+}
+
+/* Pressing something pushes it towards the surface, so its shadow tightens. */
+.dn-pressable:active {
+  --dn-e: 0.4;
+  transform: translateY(1px);
+}
+
+/* Sunk into the surface rather than sitting on it: the shadow goes inward and
+   points back towards the light. */
+.dn-sunk {
+  background: rgb(var(--dn-surface-sunk));
+  box-shadow:
+    inset calc(var(--dn-shadow-x) * var(--dn-shadow-length) * 0.4)
+      calc(var(--dn-shadow-y) * var(--dn-shadow-length) * 0.4)
+      calc(var(--dn-shadow-blur) * 0.5)
+      rgb(var(--dn-shadow-rgb) / calc(var(--dn-shadow-alpha) * 0.8));
+  transition: box-shadow var(--dn-transition) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dn-raised,
+  .dn-sunk,
+  .dn-surface {
+    transition: none;
+  }
+}
+
+/* --- panel ---------------------------------------------------------- */
+
+.dn-panel {
+  background: rgb(var(--dn-surface));
+  border-radius: var(--dn-radius);
+  padding: var(--dn-space-4);
+}
+
+.dn-panel-flush { padding: 0; }
+
+/* --- text ----------------------------------------------------------- */
+
+.dn-heading { margin: 0; letter-spacing: -0.015em; font-weight: 650; }
+.dn-heading-1 { font-size: 22px; }
+.dn-heading-2 { font-size: 17px; }
+.dn-heading-3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: rgb(var(--dn-ink-soft));
+  font-weight: 600;
+}
+
+.dn-text { margin: 0; }
+.dn-text-soft { color: rgb(var(--dn-ink-soft)); }
+.dn-text-small { font-size: 13px; }
+.dn-text-danger { color: rgb(var(--dn-danger)); }
+.dn-text-strike { text-decoration: line-through; color: rgb(var(--dn-ink-soft)); }
+
+/* --- button --------------------------------------------------------- */
+
+.dn-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--dn-space-2);
+  font: inherit;
+  font-weight: 600;
+  border: none;
+  border-radius: var(--dn-radius-sm);
+  padding: 9px 15px;
+  cursor: pointer;
+  color: rgb(var(--dn-ink));
+  background: rgb(var(--dn-surface));
+}
+
+.dn-button-primary {
+  background: rgb(var(--dn-accent));
+  color: rgb(var(--dn-accent-ink));
+}
+
+/* Quiet and ghost sit flat on the surface: no elevation, so no shadow. */
+.dn-button-quiet {
+  background: rgb(var(--dn-surface-sunk));
+  box-shadow: none;
+}
+
+.dn-button-ghost {
+  background: none;
+  box-shadow: none;
+  color: rgb(var(--dn-accent));
+  padding: 4px 6px;
+  font-weight: 500;
+}
+
+.dn-button-ghost:hover { text-decoration: underline; }
+
+.dn-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  --dn-e: 0.3;
+}
+
+.dn-button:focus-visible,
+.dn-field-input:focus-visible,
+.dn-nav-item:focus-visible,
+.dn-checkbox:focus-visible {
+  outline: 2px solid rgb(var(--dn-accent));
+  outline-offset: 2px;
+}
+
+/* --- field ---------------------------------------------------------- */
+
+.dn-field { display: grid; gap: var(--dn-space-1); }
+
+.dn-field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--dn-ink-soft));
+}
+
+.dn-field-input {
+  font: inherit;
+  color: rgb(var(--dn-ink));
+  border: 1px solid rgb(var(--dn-line));
+  border-radius: var(--dn-radius-sm);
+  padding: 9px 12px;
+  width: 100%;
+  background: rgb(var(--dn-surface-sunk));
+}
+
+.dn-field-input::placeholder { color: rgb(var(--dn-ink-soft)); }
+
+.dn-field-hint { font-size: 12px; color: rgb(var(--dn-ink-soft)); }
+.dn-field-error { font-size: 13px; color: rgb(var(--dn-danger)); }
+
+/* --- checkbox ------------------------------------------------------- */
+
+.dn-checkbox {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: var(--dn-radius-pill);
+  border: 1.5px solid rgb(var(--dn-mark, var(--dn-ink-soft)));
+  background: rgb(var(--dn-surface));
+  cursor: pointer;
+  display: grid;
+  place-content: center;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.dn-checkbox::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid rgb(var(--dn-accent-ink));
+  border-bottom: 2px solid rgb(var(--dn-accent-ink));
+  transform: rotate(-45deg) translate(0.5px, -1px) scale(0.4);
+  opacity: 0;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.dn-checkbox:checked {
+  background: rgb(var(--dn-mark, var(--dn-ink-soft)));
+  border-color: rgb(var(--dn-mark, var(--dn-ink-soft)));
+}
+
+.dn-checkbox:checked::after { opacity: 1; transform: rotate(-45deg) translate(0.5px, -1px) scale(1); }
+
+/* --- chip ----------------------------------------------------------- */
+
+.dn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 1px 8px;
+  border-radius: var(--dn-radius-pill);
+  background: rgb(var(--dn-surface-sunk));
+  color: rgb(var(--dn-ink-soft));
+  white-space: nowrap;
+}
+
+.dn-chip-accent { background: rgb(var(--dn-accent-wash)); color: rgb(var(--dn-accent)); }
+.dn-chip-danger {
+  background: rgb(var(--dn-danger) / 0.12);
+  color: rgb(var(--dn-danger));
+}
+/* An outline rather than a fill, so it never reads as the same kind of thing
+   as a filled chip beside it. */
+.dn-chip-outline { background: none; border: 1px solid rgb(var(--dn-line)); }
+
+/* --- nav ------------------------------------------------------------ */
+
+.dn-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--dn-space-2);
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  border: none;
+  background: none;
+  color: rgb(var(--dn-ink));
+  padding: 6px 10px;
+  border-radius: var(--dn-radius-sm);
+  cursor: pointer;
+}
+
+.dn-nav-item:hover { background: rgb(var(--dn-surface) / 0.75); }
+
+.dn-nav-item[aria-current="page"] {
+  background: rgb(var(--dn-accent-wash));
+  color: rgb(var(--dn-accent));
+  font-weight: 600;
+}
+
+.dn-nav-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dn-nav-count { font-size: 12px; color: rgb(var(--dn-ink-soft)); font-variant-numeric: tabular-nums; }
+.dn-nav-item[aria-current="page"] .dn-nav-count { color: inherit; }
+
+/* --- layout --------------------------------------------------------- */
+
+.dn-stack { display: flex; flex-direction: column; }
+.dn-inline { display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; }
+.dn-divider { height: 1px; background: rgb(var(--dn-line)); border: none; margin: 0; }
+
+/* --- sundial -------------------------------------------------------- */
+
+/*
+ * A small readout of where the light currently is. It exists so the kit can
+ * explain itself: the shadows move, and this is why.
+ */
+.dn-sundial {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--dn-radius-pill);
+  background:
+    linear-gradient(
+      to bottom,
+      rgb(var(--dn-amber) / calc(var(--dn-daylight) * 0.35)),
+      rgb(var(--dn-dusk) / calc((1 - var(--dn-daylight)) * 0.45))
+    ),
+    rgb(var(--dn-surface-sunk));
+  overflow: hidden;
+  flex: 0 0 auto;
+  transition: background var(--dn-transition) linear;
+}
+
+/* The horizon. */
+.dn-sundial::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 68%;
+  height: 1px;
+  background: rgb(var(--dn-ink-soft) / 0.45);
+}
+
+/* The sun itself, placed by the same numbers that place the shadows. */
+.dn-sundial-body {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--dn-radius-pill);
+  left: calc(50% + var(--dn-lateral) * 34% - 4.5px);
+  top: calc(68% - var(--dn-altitude) * 52% - 4.5px);
+  background: rgb(var(--dn-amber));
+  opacity: calc(0.35 + var(--dn-daylight) * 0.65);
+  box-shadow: 0 0 calc(4px + var(--dn-daylight) * 6px) rgb(var(--dn-amber) / 0.8);
+  transition: left var(--dn-transition) linear, top var(--dn-transition) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dn-sundial-body, .dn-sundial { transition: none; }
+}

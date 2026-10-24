@@ -8,6 +8,7 @@
 import type { Project } from "@light/core";
 import { compareOrder } from "@light/core";
 import type { LightStore } from "@light/client-sdk";
+import { Heading, NavItem, Text } from "@light/diurnal";
 
 export type View =
   | { kind: "today" }
@@ -46,24 +47,18 @@ export function Sidebar({
     if (siblings.length === 0) return null;
     return (
       <ul className="tree" role="group">
-        {siblings.map((project) => {
-          const selected = view.kind === "project" && view.projectId === project.id;
-          const count = openCount(project.id);
-          return (
-            <li key={project.id}>
-              <button
-                className={selected ? "nav-item selected" : "nav-item"}
-                style={{ paddingLeft: `${12 + depth * 14}px` }}
-                aria-current={selected ? "page" : undefined}
-                onClick={() => onSelect({ kind: "project", projectId: project.id })}
-              >
-                <span className="nav-label">{project.name}</span>
-                {count > 0 && <span className="count">{count}</span>}
-              </button>
-              {renderTree(project.id, depth + 1)}
-            </li>
-          );
-        })}
+        {siblings.map((project) => (
+          <li key={project.id}>
+            <NavItem
+              label={project.name}
+              count={openCount(project.id)}
+              depth={depth}
+              selected={view.kind === "project" && view.projectId === project.id}
+              onClick={() => onSelect({ kind: "project", projectId: project.id })}
+            />
+            {renderTree(project.id, depth + 1)}
+          </li>
+        ))}
       </ul>
     );
   }
@@ -80,25 +75,26 @@ export function Sidebar({
   return (
     <nav className="sidebar" aria-label="Views and projects">
       <ul className="tree">
-        {views.map((entry) => {
-          const selected = view.kind === entry.view.kind;
-          return (
-            <li key={entry.label}>
-              <button
-                className={selected ? "nav-item selected" : "nav-item"}
-                aria-current={selected ? "page" : undefined}
-                onClick={() => onSelect(entry.view)}
-              >
-                <span className="nav-label">{entry.label}</span>
-                {entry.count > 0 && <span className="count">{entry.count}</span>}
-              </button>
-            </li>
-          );
-        })}
+        {views.map((entry) => (
+          <li key={entry.label}>
+            <NavItem
+              label={entry.label}
+              count={entry.count}
+              selected={view.kind === entry.view.kind}
+              onClick={() => onSelect(entry.view)}
+            />
+          </li>
+        ))}
       </ul>
 
-      <h2 className="sidebar-heading">Projects</h2>
-      {renderTree(null, 0) ?? <p className="muted small pad">No projects yet.</p>}
+      <Heading level={3} className="sidebar-heading">
+        Projects
+      </Heading>
+      {renderTree(null, 0) ?? (
+        <Text tone="soft" size="small" className="pad">
+          No projects yet.
+        </Text>
+      )}
     </nav>
   );
 }

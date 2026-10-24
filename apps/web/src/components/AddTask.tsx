@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import type { Priority } from "@light/core";
+import { Button, TextField } from "@light/diurnal";
 
 export interface ParsedEntry {
   content: string;
@@ -69,23 +70,26 @@ export function AddTask({
 
   return (
     <form className="add-task" onSubmit={submit}>
-      <input
+      <TextField
+        label="New task"
+        labelHidden
+        className="add-task-text"
         value={text}
         disabled={disabled}
         placeholder="Add a task —  p1  @label  // notes"
-        aria-label="New task"
         onChange={(event) => setText(event.target.value)}
       />
-      <input
+      <TextField
+        label="Due date"
+        labelHidden
         type="date"
         value={due}
         disabled={disabled}
-        aria-label="Due date"
         onChange={(event) => setDue(event.target.value)}
       />
-      <button type="submit" disabled={disabled || parseEntry(text).content === ""}>
+      <Button variant="primary" type="submit" disabled={disabled || parseEntry(text).content === ""}>
         Add
-      </button>
+      </Button>
     </form>
   );
 }
