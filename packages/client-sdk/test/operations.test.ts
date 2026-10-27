@@ -188,6 +188,58 @@ describe("deleteTask", () => {
   });
 });
 
+describe("deleteProject", () => {
+  it("takes the project's sections and tasks with it", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const parent = ops.createTask({ projectId: p.id, content: "parent", sectionId: section.id })
+      .result;
+    ops.createTask({ projectId: p.id, content: "child", parentId: parent.id });
+
+    const result = ops.deleteProject(p.id).result;
+
+    expect(result.projects).toEqual([p.id]);
+    expect(result.sections).toEqual([section.id]);
+    expect(result.tasks).toHaveLength(2);
+    expect(store.count("project")).toBe(0);
+    expect(store.count("section")).toBe(0);
+    expect(store.count("task")).toBe(0);
+  });
+
+  it("leaves child projects alone by default", () => {
+    const parent = project("parent");
+    const child = ops.createProject({ name: "child", parentId: parent.id }).result;
+
+    const result = ops.deleteProject(parent.id).result;
+
+    expect(result.projects).toEqual([parent.id]);
+    expect(store.get("project", child.id)).not.toBeNull();
+  });
+
+  it("takes the subtree when asked, depth first", () => {
+    const parent = project("parent");
+    const child = ops.createProject({ name: "child", parentId: parent.id }).result;
+    const grandchild = ops.createProject({ name: "grandchild", parentId: child.id }).result;
+    ops.createTask({ projectId: grandchild.id, content: "buried" });
+
+    const result = ops.deleteProject(parent.id, { recursive: true }).result;
+
+    expect(result.tasks).toHaveLength(1);
+    // Depth first, so replaying the ops never leaves a project whose parent
+    // has already gone.
+    expect(result.projects).toEqual([grandchild.id, child.id, parent.id]);
+    expect(store.count("project")).toBe(0);
+  });
+
+  it("refuses to delete the inbox", () => {
+    const p = project();
+    // The inbox is an invariant of the account, not a flag a caller may clear.
+    store.mutate("project", p.id, { isInbox: true });
+
+    expect(() => ops.deleteProject(p.id)).toThrow(/inbox/);
+  });
+});
+
 describe("labels", () => {
   it("adds and removes a label on a task", () => {
     const p = project();

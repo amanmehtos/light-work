@@ -609,6 +609,44 @@ export function buildTools(): ToolDefinition[] {
     },
 
     {
+      name: "delete_project",
+      title: "Delete a project",
+      description:
+        "Deletes a project, its sections and all of its tasks. Child projects are left alone " +
+        "unless recursive is set, so a parent cannot take a whole subtree with it by " +
+        "accident. The inbox cannot be deleted. Not recoverable through this tool.",
+      readOnly: false,
+      inputSchema: { projectId: z.string(), recursive: z.boolean().optional() },
+      handler: async (args, context) => {
+        const id = String(args.projectId);
+        const project = context.store.get("project", id);
+        if (project === null) return failure(`No project with id ${id}.`);
+        if (project.isInbox) return failure("The inbox cannot be deleted.");
+
+        const children = context.store.all("project").filter((p) => p.parentId === id);
+        if (children.length > 0 && args.recursive !== true) {
+          return failure(
+            `${project.name} has ${String(children.length)} child project(s). Pass recursive ` +
+              "to delete the whole subtree, or move them elsewhere first.",
+          );
+        }
+
+        const staged = context.ops.deleteProject(id, {
+          ...(args.recursive === true ? { recursive: true } : {}),
+        });
+        await context.flush(staged.ops);
+        return result({
+          deleted: {
+            projects: staged.result.projects.length,
+            sections: staged.result.sections.length,
+            tasks: staged.result.tasks.length,
+          },
+          projectIds: staged.result.projects,
+        });
+      },
+    },
+
+    {
       name: "create_section",
       title: "Create a section",
       description:

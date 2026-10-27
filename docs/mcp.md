@@ -23,7 +23,7 @@ https://light-week.amanmehtos.workers.dev/mcp
 | Scope | What it allows |
 | --- | --- |
 | `mcp:read` | The six reading tools: projects, tasks, labels, the week plan, focus stats |
-| `mcp:write` | The nine that change things, including `delete_task`, which cascades |
+| `mcp:write` | The ten that change things, including the two deletes, which cascade |
 
 A read-only grant does not get the writing tools **registered at all**, rather
 than getting them and being refused. An agent that cannot see `delete_task`
@@ -93,6 +93,7 @@ It refuses to start on a bad token rather than failing on the first tool call.
 | `move_task` | | Between projects, sections, parents |
 | `reorder_tasks` | | Full desired order of a sibling list |
 | `create_project` | | |
+| `delete_project` | | Sections and tasks go too; child projects only with `recursive` |
 | `create_section` | | |
 | `log_focus_session` | | Backfill a session that happened away from the timer |
 
@@ -134,8 +135,11 @@ existed but could not be read.
 ## Safety
 
 Read-only tools are annotated `readOnlyHint: true`, so a host can run them
-without confirmation and prompt on the rest. `delete_task` cascades and is not
-recoverable through the API — it is annotated non-idempotent for that reason.
+without confirmation and prompt on the rest. `delete_task` and `delete_project`
+cascade and are not recoverable through the API — both are annotated
+non-idempotent for that reason. `delete_project` refuses the inbox outright,
+and refuses a project with children unless `recursive` is passed, so a one-word
+mistake cannot take a whole subtree.
 
 The endpoint speaks OAuth 2.1: PKCE (S256 only — OAuth 2.1 drops `plain`),
 dynamic client registration, rotating refresh tokens, and RFC 9728 metadata at

@@ -272,6 +272,56 @@ export class Operations {
     return { result: { deleted }, ops };
   }
 
+  /**
+   * Deletes a project with everything filed under it: its sections, its tasks,
+   * and — only when asked — its child projects, depth first.
+   *
+   * Nothing cascades in storage, because a delete op is a tombstone on a single
+   * entity. So every descendant needs an op of its own, or it outlives the
+   * project and points at an id that is gone. `deleteTask` is deliberately not
+   * reused for the tasks: it walks subtasks to avoid orphaning them, and here
+   * every task in the project is going anyway, parent or not.
+   */
+  deleteProject(
+    id: string,
+    options: { recursive?: boolean } = {},
+  ): Staged<{ projects: string[]; sections: string[]; tasks: string[] }> {
+    const ops: Op[] = [];
+    const projects: string[] = [];
+    const sections: string[] = [];
+    const tasks: string[] = [];
+
+    const collect = (projectId: string): void => {
+      const project = this.store.get("project", projectId);
+      // Guarded here rather than in the caller: every view of the account
+      // assumes an inbox exists, so no caller should be able to remove it.
+      if (project !== null && project.isInbox) {
+        throw new Error("the inbox cannot be deleted");
+      }
+
+      if (options.recursive === true) {
+        for (const child of this.store.all("project").filter((p) => p.parentId === projectId)) {
+          collect(child.id);
+        }
+      }
+      for (const task of this.store.all("task").filter((t) => t.projectId === projectId)) {
+        ops.push(this.store.remove("task", task.id));
+        tasks.push(task.id);
+      }
+      for (const section of this.store.all("section").filter((s) => s.projectId === projectId)) {
+        ops.push(this.store.remove("section", section.id));
+        sections.push(section.id);
+      }
+      if (project !== null) {
+        ops.push(this.store.remove("project", projectId));
+        projects.push(projectId);
+      }
+    };
+    collect(id);
+
+    return { result: { projects, sections, tasks }, ops };
+  }
+
   /** Moves a task to another project, section or parent, placing it last. */
   moveTask(
     id: string,
