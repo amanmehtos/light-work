@@ -31,14 +31,24 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Fail early and clearly on a bad or under-scoped token, rather than
-      # part-way through a deploy.
+      # Fail early and clearly on a missing, bad or under-scoped token, rather
+      # than part-way through a deploy.
+      #
+      # `wrangler whoami` exits 0 when it is not authenticated — it reports that
+      # it has no credentials and succeeds — so on its own this step waved an
+      # empty secret straight through and the run died at the migration instead.
+      # The secrets are therefore checked before it, and its output after it.
       - name: Check the token
         working-directory: services/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler whoami
+        run: |
+          : "${CLOUDFLARE_API_TOKEN:?is empty — add it under Settings → Secrets and variables → Actions}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?is empty — add it under Settings → Secrets and variables → Actions}"
+          npx wrangler whoami | tee whoami.txt
+          grep -q 'Account ID' whoami.txt || { echo "::error::the token is set but authenticates no account"; exit 1; }
+          rm -f whoami.txt
 
       - run: pnpm build:web
 
