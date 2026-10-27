@@ -70,7 +70,7 @@ export function AddTask({
   return (
     <form className="add-task" onSubmit={submit}>
       <div className="dn-field add-task-text">
-        <label className="dn-label visually-hidden" htmlFor="add-task-content">
+        <label className="dn-label dn-sr-only" htmlFor="add-task-content">
           New task
         </label>
         <input
@@ -83,7 +83,7 @@ export function AddTask({
         />
       </div>
       <div className="dn-field add-task-date">
-        <label className="dn-label visually-hidden" htmlFor="add-task-due">
+        <label className="dn-label dn-sr-only" htmlFor="add-task-due">
           Due date
         </label>
         <input

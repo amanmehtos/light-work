@@ -7,7 +7,6 @@ import { createRoot } from "react-dom/client";
 import "diurnal-ui/diurnal.css";
 import "diurnal-ui/diurnal.mjs";
 
-import "./diurnal-additions.css";
 import { App } from "./App.js";
 import "./styles.css";
 

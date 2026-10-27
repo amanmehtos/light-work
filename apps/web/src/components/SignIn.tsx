@@ -107,7 +107,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: StoredSession) =>
                   <GoogleMark />
                   Continue with Google
                 </a>
-                <div className="signin-or">
+                <div className="dn-divider dn-divider--labelled">
                   <span>or</span>
                 </div>
               </>
