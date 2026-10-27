@@ -27,7 +27,7 @@ import {
   canReadTasks,
   canWrite,
   canWriteTasks,
-  canonicalResource,
+  defaultResourceFor,
   exchangeAuthorizationCode,
   findAnyClient,
   formatScopes,
@@ -407,7 +407,7 @@ export function createApp(context: AppOptions) {
     consent.searchParams.set("redirect_uri", redirectUri);
     consent.searchParams.set("code_challenge", query.code_challenge);
     consent.searchParams.set("scope", formatScopes(scopes));
-    consent.searchParams.set("resource", query.resource ?? canonicalResource(origin));
+    consent.searchParams.set("resource", query.resource ?? defaultResourceFor(origin, scopes));
     if (query.state !== undefined) consent.searchParams.set("state", query.state);
     return c.redirect(consent.toString(), 302);
   });
@@ -441,14 +441,15 @@ export function createApp(context: AppOptions) {
       return c.json({ redirect: url.toString() });
     }
 
-    const resource = typeof body.resource === "string" ? body.resource : canonicalResource(origin);
-    if (!resourceMatches(resource, origin)) return c.json({ error: "invalid_target" }, 400);
-
     const codeChallenge = typeof body.code_challenge === "string" ? body.code_challenge : "";
     if (codeChallenge === "") return c.json({ error: "invalid_request" }, 400);
 
     const scopes = parseScopes(typeof body.scope === "string" ? body.scope : "");
     if (scopes.length === 0) return c.json({ error: "invalid_scope" }, 400);
+
+    const resource =
+      typeof body.resource === "string" ? body.resource : defaultResourceFor(origin, scopes);
+    if (!resourceMatches(resource, origin)) return c.json({ error: "invalid_target" }, 400);
 
     const code = await issueCode(
       context.auth,
@@ -457,7 +458,11 @@ export function createApp(context: AppOptions) {
         redirectUri,
         codeChallenge,
         scopes,
-        resource: canonicalResource(origin),
+        // The resource the client asked for and we just validated. This used
+        // to pass canonicalResource unconditionally, which stamped every token
+        // with the MCP audience however it was requested and made the check
+        // above decorative.
+        resource,
         state,
       },
       c.get("session").user.id,

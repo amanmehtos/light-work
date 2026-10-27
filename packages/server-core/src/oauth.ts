@@ -164,6 +164,20 @@ export function resourceMatches(resource: string | undefined | null, origin: str
 /* Discovery documents                                                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Which resource a grant is for, when the client did not say.
+ *
+ * A client should send `resource` (RFC 8707) and the apps do. One that does not
+ * should still get a token whose audience matches what it asked to be able to
+ * do, rather than the MCP endpoint by default — an app token stamped for /mcp
+ * works only because `resourceMatches` is lenient, and relying on that leaves
+ * the audience saying the wrong thing.
+ */
+export function defaultResourceFor(origin: string, scopes: readonly OAuthScope[]): string {
+  const wantsTasks = scopes.some((scope) => scope.startsWith("tasks:"));
+  return wantsTasks ? syncResource(origin) : canonicalResource(origin);
+}
+
 /** Which of this server's two protected resources a document or challenge is about. */
 export type ProtectedResource = "mcp" | "sync";
 

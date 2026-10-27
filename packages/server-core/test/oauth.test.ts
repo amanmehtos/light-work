@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { sha256 } from "../src/auth.js";
 import {
   DevMailer,
   MemoryAccountStores,
@@ -691,6 +692,15 @@ describe("the sync API under an app's grant", () => {
     );
     expect(response.status).toBe(401);
     expect((await json(response)).error).toContain("another resource");
+  });
+
+  it("stamps an app token with the sync audience, not the MCP one", async () => {
+    // approve used to pass canonicalResource unconditionally, so every token
+    // claimed the MCP audience and only worked here because resourceMatches is
+    // lenient about the two paths.
+    const token = await appToken("tasks:read tasks:write");
+    const resolved = await auth.findToken(await sha256(token));
+    expect(resolved?.resource).toBe("https://api.test/sync");
   });
 
   it("will not let an app grant further grants", async () => {
