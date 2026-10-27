@@ -39,6 +39,17 @@
     // to the asset server comes back 405.
     "run_worker_first": [
       "/auth/*",
+      // OAuth for the MCP endpoint. Listed one path at a time rather than
+      // "/oauth/*" on purpose: /oauth/consent is a page of the app, and a
+      // wildcard here would hand it to the Worker, which has no such route.
+      "/oauth/authorize",
+      "/oauth/register",
+      "/oauth/approve",
+      "/oauth/token",
+      // Discovery. Without this these fall through to the SPA, whose
+      // single-page-application fallback answers 200 with index.html — so a
+      // client asking whether we support OAuth got HTML and a success code.
+      "/.well-known/*",
       "/sync",
       "/sync/*",
       "/account/*",

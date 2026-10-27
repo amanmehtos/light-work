@@ -135,6 +135,82 @@ export function rememberedMethods(): { google: boolean } {
   return { google: readStorage(METHODS_KEY) === "google" };
 }
 
+/* ------------------------------------------------------------------ */
+/* Granting an agent access                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The parameters the authorization endpoint hands to the consent screen.
+ *
+ * They arrive through the browser and are therefore not trusted: the server
+ * re-checks every one of them against the registered client when the grant is
+ * made. What they are good for here is telling the person what they are about
+ * to allow.
+ */
+export interface ConsentRequest {
+  clientId: string;
+  clientName: string;
+  redirectUri: string;
+  codeChallenge: string;
+  scope: string;
+  resource: string;
+  state: string | null;
+}
+
+export function readConsentRequest(search: string): ConsentRequest | null {
+  const params = new URLSearchParams(search);
+  const clientId = params.get("client_id");
+  const redirectUri = params.get("redirect_uri");
+  const codeChallenge = params.get("code_challenge");
+  const scope = params.get("scope");
+  if (clientId === null || redirectUri === null || codeChallenge === null || scope === null) {
+    return null;
+  }
+  return {
+    clientId,
+    clientName: params.get("client_name") ?? "An unnamed client",
+    redirectUri,
+    codeChallenge,
+    scope,
+    resource: params.get("resource") ?? "",
+    state: params.get("state"),
+  };
+}
+
+/**
+ * Grants or refuses, and returns where to send the browser next.
+ *
+ * Refusing still produces a redirect: the client is told `access_denied`
+ * rather than left waiting on a window that never comes back.
+ */
+export async function decideConsent(
+  token: string,
+  request: ConsentRequest,
+  approve: boolean,
+): Promise<string> {
+  const response = await fetch(`${API_BASE}/oauth/approve`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      approve,
+      client_id: request.clientId,
+      redirect_uri: request.redirectUri,
+      code_challenge: request.codeChallenge,
+      scope: request.scope,
+      resource: request.resource,
+      state: request.state,
+    }),
+  });
+  const body = (await response.json().catch(() => ({}))) as {
+    redirect?: string;
+    error?: string;
+  };
+  if (!response.ok || typeof body.redirect !== "string") {
+    throw new Error(body.error ?? "Could not complete the request.");
+  }
+  return body.redirect;
+}
+
 /** Whether this deployment has a Google OAuth client configured. */
 export async function signInMethods(): Promise<{ google: boolean }> {
   try {

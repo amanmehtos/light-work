@@ -503,3 +503,130 @@ describe("compaction", () => {
     expect((await stub.stats()).tombstones).toBe(0);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* OAuth                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The same handshake the server-core suite runs against the in-memory store,
+ * run here against D1 inside workerd.
+ *
+ * This is the point of having a port: two backends that agree on the HTTP
+ * surface but disagree about, say, whether taking a code really deletes it
+ * would produce an auth bug that only shows up in production. The memory store
+ * does that with a Map and D1 does it with a DELETE, and both have to reach the
+ * same answer.
+ */
+describe("OAuth on D1", () => {
+  const REDIRECT = "http://127.0.0.1:40123/callback";
+  // Written out rather than computed: produced by a different SHA-256
+  // implementation, so this checks ours agrees with it. Verifier is "a" x64.
+  const VERIFIER = "a".repeat(64);
+  const CHALLENGE = "_-BU_nrgy23GXDr5th1SCfQ5hR20PQulmXM33xVGaOs";
+
+  async function registerClient(): Promise<string> {
+    const response = await SELF.fetch("https://api.test/oauth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_name: "D1 Agent", redirect_uris: [REDIRECT] }),
+    });
+    expect(response.status).toBe(201);
+    return (await response.json<{ client_id: string }>()).client_id;
+  }
+
+  it("registers, grants, exchanges and then serves MCP", async () => {
+    const { token: sessionToken } = await signIn();
+    const clientId = await registerClient();
+
+    const authorize = await SELF.fetch(
+      `https://api.test/oauth/authorize?response_type=code&client_id=${clientId}` +
+        `&redirect_uri=${encodeURIComponent(REDIRECT)}` +
+        `&code_challenge=${CHALLENGE}&code_challenge_method=S256&scope=mcp%3Aread+mcp%3Awrite`,
+      { redirect: "manual" },
+    );
+    expect(authorize.status).toBe(302);
+    const consent = new URL(authorize.headers.get("location") ?? "");
+    expect(consent.pathname).toBe("/oauth/consent");
+
+    const approved = await SELF.fetch(
+      "https://api.test/oauth/approve",
+      authed(sessionToken, {
+        method: "POST",
+        body: JSON.stringify({
+          approve: true,
+          client_id: clientId,
+          redirect_uri: REDIRECT,
+          code_challenge: consent.searchParams.get("code_challenge"),
+          scope: consent.searchParams.get("scope"),
+          resource: consent.searchParams.get("resource"),
+        }),
+      }),
+    );
+    expect(approved.status).toBe(200);
+    const { redirect } = await approved.json<{ redirect: string }>();
+    const code = new URL(redirect).searchParams.get("code") ?? "";
+    expect(code).not.toBe("");
+
+    const tokenResponse = await SELF.fetch("https://api.test/oauth/token", {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id: clientId,
+        redirect_uri: REDIRECT,
+        code_verifier: VERIFIER,
+      }),
+    });
+    expect(tokenResponse.status).toBe(200);
+    const tokens = await tokenResponse.json<{ access_token: string; scope: string }>();
+    expect(tokens.scope).toBe("mcp:read mcp:write");
+
+    const mcp = await SELF.fetch("https://api.test/mcp", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokens.access_token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "vitest", version: "0" },
+        },
+      }),
+    });
+    expect(mcp.status).toBe(200);
+
+    // The row really is gone, not just reported as spent.
+    const replay = await SELF.fetch("https://api.test/oauth/token", {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id: clientId,
+        redirect_uri: REDIRECT,
+        code_verifier: VERIFIER,
+      }),
+    });
+    expect(replay.status).toBe(400);
+  });
+
+  it("serves discovery as JSON rather than the app's HTML", async () => {
+    const response = await SELF.fetch("https://api.test/.well-known/oauth-protected-resource");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe("https://api.test/mcp");
+  });
+
+  it("challenges an unauthenticated MCP request with where to authenticate", async () => {
+    const response = await SELF.fetch("https://api.test/mcp", { method: "POST" });
+    expect(response.status).toBe(401);
+    expect(response.headers.get("WWW-Authenticate")).toContain("resource_metadata=");
+  });
+});

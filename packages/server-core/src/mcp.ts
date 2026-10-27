@@ -47,6 +47,11 @@ export interface McpOptions {
    * the runtime forbids. Node can leave this unset and get the faster default.
    */
   jsonSchemaValidator?: jsonSchemaValidator;
+  /**
+   * Whether this caller may change anything. False for a token granted only
+   * `mcp:read`, which then never sees the writing tools.
+   */
+  writable?: boolean;
 }
 
 export async function handleMcpRequest(
@@ -60,6 +65,7 @@ export async function handleMcpRequest(
   await session.refresh();
 
   const server = createServer(session.context, {
+    writable: options.writable ?? true,
     ...(options.jsonSchemaValidator !== undefined
       ? { jsonSchemaValidator: options.jsonSchemaValidator }
       : {}),

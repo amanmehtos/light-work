@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { compareOrder, type Task } from "@light/core";
-import { loadSession, logout, type StoredSession } from "./auth.js";
+import { loadSession, logout, readConsentRequest, type StoredSession } from "./auth.js";
 import { ThemeToggle, describeLight, useDiurnal } from "./diurnal.js";
 import { useLightWeek } from "./store-hook.js";
 import { AddTask, type ParsedEntry } from "./components/AddTask.js";
+import { Consent } from "./components/Consent.js";
 import { SignIn } from "./components/SignIn.js";
 import { Sidebar, type View } from "./components/Sidebar.js";
 import { TaskRow } from "./components/TaskRow.js";
@@ -20,12 +21,43 @@ function todayISO(): string {
 export function App() {
   const [session, setSession] = useState<StoredSession | null>(() => loadSession());
 
+  // There is no router here, and one path does not justify adding one: an
+  // agent's authorization request lands on /oauth/consent and nothing else
+  // needs a URL of its own. Read once — the page does not navigate.
+  const consent = useMemo(() => {
+    if (window.location.pathname !== "/oauth/consent") return undefined;
+    return readConsentRequest(window.location.search);
+  }, []);
+
+  // Signing in comes first either way: consent is a thing only a known person
+  // can give, and SignIn returns here once it has one.
+  if (session === null) return <SignIn onSignedIn={setSession} />;
+
+  if (consent !== undefined) {
+    return consent === null ? <ConsentUnreadable /> : <Consent request={consent} session={session} />;
+  }
+
   // Diurnal's runtime is installed by importing it in main.tsx; it writes the
   // light to :root by itself, so there is no provider to mount here.
-  return session === null ? (
-    <SignIn onSignedIn={setSession} />
-  ) : (
-    <Workspace session={session} onSignOut={() => setSession(null)} />
+  return <Workspace session={session} onSignOut={() => setSession(null)} />;
+}
+
+/** A consent link missing the parameters that say what is being asked for. */
+function ConsentUnreadable() {
+  return (
+    <main className="signin">
+      <div className="dn-card dn-card--float signin-card">
+        <div className="dn-eyebrow">Light Week</div>
+        <h1 className="consent-title">That link is incomplete</h1>
+        <p className="dn-prose">
+          It does not say which application is asking, or for what. Start the connection again from
+          the app you are trying to connect.
+        </p>
+        <a className="dn-btn dn-btn--block" href="/">
+          Go to your tasks
+        </a>
+      </div>
+    </main>
   );
 }
 

@@ -84,6 +84,88 @@ export interface ResolvedSession {
   expiresAt: string;
 }
 
+/* ------------------------------------------------------------------ */
+/* OAuth                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The scopes this server issues.
+ *
+ * They line up with the `readOnly` flag every MCP tool already carries, so a
+ * grant is enforced by which tools are registered at all rather than by a
+ * check inside each one.
+ */
+export type OAuthScope = "mcp:read" | "mcp:write";
+
+export const OAUTH_SCOPES: readonly OAuthScope[] = ["mcp:read", "mcp:write"];
+
+/**
+ * A client registered dynamically (RFC 7591).
+ *
+ * Public clients only: an agent on someone's laptop cannot keep a secret, so
+ * there is none to keep. PKCE is what actually binds the code to the client.
+ */
+export interface OAuthClient {
+  id: string;
+  name: string;
+  redirectUris: string[];
+  createdAt: string;
+}
+
+/** An authorization code. Stored hashed and single-use, like a login code. */
+export interface OAuthCode {
+  codeHash: string;
+  clientId: string;
+  userId: string;
+  redirectUri: string;
+  /** The S256 challenge; the verifier never touches the database. */
+  codeChallenge: string;
+  scope: string;
+  /** RFC 8707 audience. Checked again when the token is used. */
+  resource: string;
+  expiresAt: string;
+}
+
+export interface OAuthTokenRecord {
+  tokenHash: string;
+  refreshHash: string | null;
+  clientId: string;
+  userId: string;
+  scope: string;
+  resource: string;
+  expiresAt: string;
+}
+
+export interface ResolvedOAuthToken {
+  user: User;
+  clientId: string;
+  scopes: OAuthScope[];
+  resource: string;
+  expiresAt: string;
+}
+
+/**
+ * Clients, codes and tokens.
+ *
+ * Split out from {@link AuthStore} so that code which only grants access does
+ * not get the ability to mint sessions — but implemented by the same adapters,
+ * because these rows live in the same database with the same lifecycle and are
+ * swept by the same scheduled prune.
+ */
+export interface OAuthStore {
+  registerClient(client: OAuthClient): Promise<void>;
+  findClient(id: string): Promise<OAuthClient | null>;
+
+  putCode(code: OAuthCode): Promise<void>;
+  /** Single use: taking a code consumes it, whether or not it was valid. */
+  takeCode(codeHash: string): Promise<OAuthCode | null>;
+
+  createToken(token: OAuthTokenRecord): Promise<void>;
+  findToken(tokenHash: string): Promise<ResolvedOAuthToken | null>;
+  findTokenByRefresh(refreshHash: string): Promise<OAuthTokenRecord | null>;
+  deleteToken(tokenHash: string): Promise<void>;
+}
+
 /**
  * Global account data: small, queryable by email, and read on every request.
  *
@@ -91,7 +173,7 @@ export interface ResolvedSession {
  * live in different services for a reason — see docs/architecture.md on the
  * free-tier write budget.
  */
-export interface AuthStore {
+export interface AuthStore extends OAuthStore {
   findUserByEmail(email: string): Promise<User | null>;
   createUser(user: User, createdAt: string): Promise<void>;
 
@@ -156,6 +238,14 @@ export interface ServerContext {
    * the email code, so a deployment never advertises a button that cannot work.
    */
   google?: GoogleConfig;
+  /**
+   * Where the web app is served from, when that is not this server's own
+   * origin — behind the dev server's proxy the Worker answers on :8787 while
+   * the app is on :5173, and the OAuth consent screen is a page of the app.
+   * Defaults to the request's origin, which is right in production, where one
+   * Worker serves both.
+   */
+  appUrl?: string;
   /** Injectable for tests. */
   now?: () => number;
   /** Shown at the root endpoint, so a deployment can say where it runs. */

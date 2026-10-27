@@ -25,6 +25,7 @@ import {
   type Record_,
   type SequencedOp,
 } from "@light/core";
+import { parseScopes } from "../oauth.js";
 import type {
   AccountStats,
   AccountStore,
@@ -33,7 +34,11 @@ import type {
   LoginCode,
   Mailer,
   MailResult,
+  OAuthClient,
+  OAuthCode,
+  OAuthTokenRecord,
   Realtime,
+  ResolvedOAuthToken,
   ResolvedSession,
   SessionRecord,
   Snapshot,
@@ -192,6 +197,9 @@ export class MemoryAuthStore implements AuthStore {
   private readonly users = new Map<string, User>();
   private readonly codes = new Map<string, LoginCode>();
   private readonly sessions = new Map<string, SessionRecord>();
+  private readonly clients = new Map<string, OAuthClient>();
+  private readonly oauthCodes = new Map<string, OAuthCode>();
+  private readonly tokens = new Map<string, OAuthTokenRecord>();
 
   async findUserByEmail(email: string): Promise<User | null> {
     return this.users.get(email) ?? null;
@@ -234,12 +242,67 @@ export class MemoryAuthStore implements AuthStore {
     this.sessions.delete(tokenHash);
   }
 
+  /* ---------------------------------------------------------------- */
+  /* OAuth                                                             */
+  /* ---------------------------------------------------------------- */
+
+  async registerClient(client: OAuthClient): Promise<void> {
+    this.clients.set(client.id, client);
+  }
+
+  async findClient(id: string): Promise<OAuthClient | null> {
+    return this.clients.get(id) ?? null;
+  }
+
+  async putCode(code: OAuthCode): Promise<void> {
+    this.oauthCodes.set(code.codeHash, code);
+  }
+
+  async takeCode(codeHash: string): Promise<OAuthCode | null> {
+    const code = this.oauthCodes.get(codeHash);
+    // Consumed on read, valid or not.
+    this.oauthCodes.delete(codeHash);
+    return code ?? null;
+  }
+
+  async createToken(token: OAuthTokenRecord): Promise<void> {
+    this.tokens.set(token.tokenHash, token);
+  }
+
+  async findToken(tokenHash: string): Promise<ResolvedOAuthToken | null> {
+    const token = this.tokens.get(tokenHash);
+    if (token === undefined) return null;
+    const user = [...this.users.values()].find((candidate) => candidate.id === token.userId);
+    if (user === undefined) return null;
+    return {
+      user,
+      clientId: token.clientId,
+      scopes: parseScopes(token.scope),
+      resource: token.resource,
+      expiresAt: token.expiresAt,
+    };
+  }
+
+  async findTokenByRefresh(refreshHash: string): Promise<OAuthTokenRecord | null> {
+    return [...this.tokens.values()].find((token) => token.refreshHash === refreshHash) ?? null;
+  }
+
+  async deleteToken(tokenHash: string): Promise<void> {
+    this.tokens.delete(tokenHash);
+  }
+
   async pruneExpired(nowIso: string): Promise<void> {
     for (const [hash, session] of [...this.sessions]) {
       if (session.expiresAt < nowIso) this.sessions.delete(hash);
     }
     for (const [email, code] of [...this.codes]) {
       if (code.expiresAt < nowIso) this.codes.delete(email);
+    }
+    for (const [hash, code] of [...this.oauthCodes]) {
+      if (code.expiresAt < nowIso) this.oauthCodes.delete(hash);
+    }
+    for (const [hash, token] of [...this.tokens]) {
+      if (token.expiresAt < nowIso) this.tokens.delete(hash);
     }
   }
 }

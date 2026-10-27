@@ -31,6 +31,9 @@ function appFor(env: Env, origin: string) {
       realtime: new DurableObjectRealtime(env.ACCOUNT),
       mailer: mailerFor(env),
       ...(google !== undefined ? { google } : {}),
+      ...(env.PUBLIC_URL !== undefined && env.PUBLIC_URL !== ""
+        ? { appUrl: env.PUBLIC_URL.replace(/\/+$/, "") }
+        : {}),
       platform: "cloudflare",
       // The SDK's default validator compiles schemas with `new Function`,
       // which Workers forbid.

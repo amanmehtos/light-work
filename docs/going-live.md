@@ -12,7 +12,7 @@ submodule, which carries Diurnal UI:
 git clone --recurse-submodules git@github.com:amanmehtos/light-work.git
 cd light-work
 pnpm install
-pnpm -r test          # 245 passing
+pnpm -r test          # 293 passing
 ```
 
 An existing clone that predates the submodule needs
@@ -100,8 +100,8 @@ signing in is in your Workspace), and create an **OAuth client ID** of type
 
 | Field | Value |
 |---|---|
-| Authorised JavaScript origin | `https://<your-worker>.workers.dev` |
-| Authorised redirect URI | `https://<your-worker>.workers.dev/auth/google/callback` |
+| Authorised JavaScript origin | `https://light-week.amanmehtos.workers.dev` |
+| Authorised redirect URI | `https://light-week.amanmehtos.workers.dev/auth/google/callback` |
 
 Add a second redirect URI, `http://localhost:5173/api/auth/google/callback`, to
 use it in development too — the dev server proxies `/api` to the Worker, so the
@@ -171,7 +171,7 @@ pnpm deploy:check
 ## 5. Check it
 
 ```sh
-curl https://light-week.<your-subdomain>.workers.dev/healthz
+curl https://light-week.amanmehtos.workers.dev/healthz
 # {"name":"light-week-api","protocol":1,"platform":"cloudflare","docs":"...","ok":true}
 ```
 

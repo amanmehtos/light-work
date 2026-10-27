@@ -22,10 +22,32 @@ import {
   verifyLoginCode,
 } from "./auth.js";
 import { authorizeUrl, exchangeCode, verifyState } from "./google.js";
+import {
+  authorizationServerMetadata,
+  canWrite,
+  canonicalResource,
+  exchangeAuthorizationCode,
+  formatScopes,
+  issueCode,
+  parseScopes,
+  protectedResourceMetadata,
+  redirectUriAllowed,
+  refreshTokens,
+  registerClient,
+  resolveOAuthToken,
+  resourceMatches,
+  validateRegistration,
+  wwwAuthenticate,
+} from "./oauth.js";
 import { handleMcpRequest } from "./mcp.js";
-import type { ResolvedSession, ServerContext } from "./ports.js";
+import { OAUTH_SCOPES, type OAuthScope, type ResolvedSession, type ServerContext } from "./ports.js";
 
-type Vars = { session: ResolvedSession; token: string };
+type Vars = {
+  session: ResolvedSession;
+  token: string;
+  /** What the credential is allowed to do. A session token gets everything. */
+  scopes: OAuthScope[];
+};
 
 export interface AppOptions extends ServerContext {
   /** Passed through to the MCP server; Workers must supply the cfworker one. */
@@ -206,7 +228,281 @@ export function createApp(context: AppOptions) {
 
   app.use("/sync/*", bearerAuth);
   app.use("/account/*", bearerAuth);
-  app.use("/mcp", bearerAuth);
+
+  /* ---------------------------------------------------------------- */
+  /* OAuth                                                            */
+  /*                                                                  */
+  /* This server is both the resource server and the authorization    */
+  /* server. That is the simple case the MCP spec describes, and it   */
+  /* avoids standing up a second service for a deployment whose whole */
+  /* point is to fit on a free plan.                                  */
+  /* ---------------------------------------------------------------- */
+
+  const originOf = (c: { req: { url: string } }): string => new URL(c.req.url).origin;
+
+  /** RFC 9728. How a client gets from a 401 to an authorization server. */
+  app.get("/.well-known/oauth-protected-resource", (c) =>
+    c.json(protectedResourceMetadata(originOf(c))),
+  );
+
+  /** The same document under the resource path, which some clients prefer. */
+  app.get("/.well-known/oauth-protected-resource/mcp", (c) =>
+    c.json(protectedResourceMetadata(originOf(c))),
+  );
+
+  /** RFC 8414. */
+  app.get("/.well-known/oauth-authorization-server", (c) =>
+    c.json(authorizationServerMetadata(originOf(c))),
+  );
+
+  /** Dynamic client registration (RFC 7591). */
+  app.post("/oauth/register", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid_client_metadata" }, 400);
+    }
+    const checked = validateRegistration(body as Record<string, unknown>);
+    if (!checked.ok) {
+      return c.json({ error: checked.reason }, 400);
+    }
+    const registered = await registerClient(
+      context.auth,
+      checked.name,
+      checked.redirectUris,
+      now(),
+    );
+    return c.json(registered, 201);
+  });
+
+  /**
+   * The authorization endpoint.
+   *
+   * It cannot tell who is asking: the web app keeps its token in localStorage,
+   * not a cookie, so nothing server-rendered here knows the user. So this
+   * validates what it can and hands the request to the app, which is signed in
+   * and can ask. The parameters travel through the browser unsigned because
+   * /oauth/approve checks every one of them against the registered client
+   * again — a tampered redirect URI is not one the client registered, and a
+   * tampered challenge only binds the code to a verifier the tamperer cannot
+   * produce.
+   */
+  app.get("/oauth/authorize", async (c) => {
+    const query = c.req.query();
+    const origin = originOf(c);
+
+    const client = await context.auth.findClient(query.client_id ?? "");
+    if (client === null) {
+      return c.json({ error: "invalid_client", error_description: "unknown client" }, 400);
+    }
+
+    const redirectUri = query.redirect_uri ?? "";
+    // An unregistered redirect URI is the one error that must NOT be sent to
+    // that URI: doing so is the open redirect this check exists to prevent.
+    if (!redirectUriAllowed(client, redirectUri)) {
+      return c.json(
+        { error: "invalid_request", error_description: "redirect_uri is not registered" },
+        400,
+      );
+    }
+
+    const bounce = (error: string): Response => {
+      const url = new URL(redirectUri);
+      url.searchParams.set("error", error);
+      if (query.state !== undefined) url.searchParams.set("state", query.state);
+      url.searchParams.set("iss", origin);
+      return c.redirect(url.toString(), 302);
+    };
+
+    if (query.response_type !== "code") return bounce("unsupported_response_type");
+    if (query.code_challenge === undefined || query.code_challenge === "") {
+      return bounce("invalid_request");
+    }
+    // OAuth 2.1 drops `plain`; accepting it would let anyone who sees the
+    // authorization request replay it.
+    if (query.code_challenge_method !== "S256") return bounce("invalid_request");
+    if (query.resource !== undefined && !resourceMatches(query.resource, origin)) {
+      return bounce("invalid_target");
+    }
+
+    // A client that asks for nothing gets everything it could have asked for,
+    // which is the OAuth default-scope convention. The consent screen shows
+    // exactly what is being granted either way, and a silently read-only
+    // connection would fail later in a way nobody could diagnose.
+    const asked = parseScopes(query.scope);
+    const scopes = asked.length > 0 ? asked : [...OAUTH_SCOPES];
+
+    // The consent screen is a page of the app, which is not always here.
+    const consent = new URL("/oauth/consent", context.appUrl ?? origin);
+    consent.searchParams.set("client_id", client.id);
+    consent.searchParams.set("client_name", client.name);
+    consent.searchParams.set("redirect_uri", redirectUri);
+    consent.searchParams.set("code_challenge", query.code_challenge);
+    consent.searchParams.set("scope", formatScopes(scopes));
+    consent.searchParams.set("resource", query.resource ?? canonicalResource(origin));
+    if (query.state !== undefined) consent.searchParams.set("state", query.state);
+    return c.redirect(consent.toString(), 302);
+  });
+
+  /**
+   * The grant itself, made by the signed-in user through the app.
+   *
+   * Authenticated with the session, which is what proves who is granting. Every
+   * parameter is re-checked here rather than trusted from the redirect.
+   */
+  app.post("/oauth/approve", bearerAuth, async (c) => {
+    const origin = originOf(c);
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+
+    const clientId = typeof body.client_id === "string" ? body.client_id : "";
+    const redirectUri = typeof body.redirect_uri === "string" ? body.redirect_uri : "";
+    const client = await context.auth.findClient(clientId);
+    if (client === null || !redirectUriAllowed(client, redirectUri)) {
+      return c.json({ error: "invalid_request" }, 400);
+    }
+
+    const state = typeof body.state === "string" ? body.state : null;
+    const url = new URL(redirectUri);
+    if (state !== null) url.searchParams.set("state", state);
+    // RFC 9207: say who issued this, so a client that recorded our issuer can
+    // reject a response that came from somewhere else.
+    url.searchParams.set("iss", origin);
+
+    if (body.approve !== true) {
+      url.searchParams.set("error", "access_denied");
+      return c.json({ redirect: url.toString() });
+    }
+
+    const resource = typeof body.resource === "string" ? body.resource : canonicalResource(origin);
+    if (!resourceMatches(resource, origin)) return c.json({ error: "invalid_target" }, 400);
+
+    const codeChallenge = typeof body.code_challenge === "string" ? body.code_challenge : "";
+    if (codeChallenge === "") return c.json({ error: "invalid_request" }, 400);
+
+    const scopes = parseScopes(typeof body.scope === "string" ? body.scope : "");
+    if (scopes.length === 0) return c.json({ error: "invalid_scope" }, 400);
+
+    const code = await issueCode(
+      context.auth,
+      {
+        clientId: client.id,
+        redirectUri,
+        codeChallenge,
+        scopes,
+        resource: canonicalResource(origin),
+        state,
+      },
+      c.get("session").user.id,
+      now(),
+    );
+    url.searchParams.set("code", code);
+    return c.json({ redirect: url.toString() });
+  });
+
+  /** The token endpoint. Public clients, so PKCE rather than a client secret. */
+  app.post("/oauth/token", async (c) => {
+    const form = await c.req.formData().catch(() => null);
+    if (form === null) return c.json({ error: "invalid_request" }, 400);
+    const field = (name: string): string => {
+      const value = form.get(name);
+      return typeof value === "string" ? value : "";
+    };
+
+    const grantType = field("grant_type");
+    const result =
+      grantType === "authorization_code"
+        ? await exchangeAuthorizationCode(
+            context.auth,
+            {
+              code: field("code"),
+              clientId: field("client_id"),
+              redirectUri: field("redirect_uri"),
+              verifier: field("code_verifier"),
+            },
+            now(),
+          )
+        : grantType === "refresh_token"
+          ? await refreshTokens(
+              context.auth,
+              { refreshToken: field("refresh_token"), clientId: field("client_id") },
+              now(),
+            )
+          : { ok: false as const, reason: "unsupported_grant_type" as const };
+
+    if (!result.ok || result.tokens === undefined) {
+      return c.json({ error: result.reason ?? "invalid_grant" }, 400);
+    }
+
+    return new Response(
+      JSON.stringify({
+        access_token: result.tokens.accessToken,
+        token_type: "Bearer",
+        expires_in: result.tokens.expiresIn,
+        refresh_token: result.tokens.refreshToken,
+        scope: result.tokens.scope,
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json; charset=UTF-8",
+          // Tokens must not sit in a shared cache.
+          "Cache-Control": "no-store",
+          Pragma: "no-cache",
+        },
+      },
+    );
+  });
+
+  /**
+   * /mcp takes either kind of credential.
+   *
+   * An OAuth access token is the documented way and carries a scope and an
+   * audience. A plain session token still works, because that is what the
+   * existing setups use and breaking them to tidy this up would be rude — it is
+   * simply treated as a full-powered grant.
+   */
+  const mcpAuth = createMiddleware<{ Variables: Vars }>(async (c, next) => {
+    const origin = originOf(c);
+    const header = c.req.header("Authorization");
+    const token = header?.startsWith("Bearer ") === true ? header.slice(7) : undefined;
+
+    const challenge = (error: string, description: string): Response =>
+      new Response(JSON.stringify({ error: description }), {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json; charset=UTF-8",
+          "WWW-Authenticate": wwwAuthenticate(origin, error),
+        },
+      });
+
+    if (token === undefined || token === "") {
+      return challenge("invalid_request", "missing bearer token");
+    }
+
+    const granted = await resolveOAuthToken(context.auth, token, now());
+    if (granted !== null) {
+      // The audience check. Without it a token minted by this server for some
+      // other resource would be accepted here.
+      if (!resourceMatches(granted.resource, origin)) {
+        return challenge("invalid_token", "token was issued for another resource");
+      }
+      c.set("session", { user: granted.user, expiresAt: granted.expiresAt });
+      c.set("token", token);
+      c.set("scopes", granted.scopes);
+      await next();
+      return;
+    }
+
+    const session = await resolveSession(context.auth, token, now());
+    if (session === null) return challenge("invalid_token", "invalid or expired token");
+    c.set("session", session);
+    c.set("token", token);
+    c.set("scopes", [...OAUTH_SCOPES]);
+    await next();
+  });
+
+  app.use("/mcp", mcpAuth);
 
   app.get("/account/me", (c) => c.json(c.get("session").user));
 
@@ -303,16 +599,18 @@ export function createApp(context: AppOptions) {
   /* MCP                                                              */
   /* ---------------------------------------------------------------- */
 
-  /**
-   * Authenticated with the same bearer token as the rest of the API, so an
-   * agent is given a session token rather than a second kind of credential.
-   * Proper OAuth, which lets a user grant an agent access without handing over
-   * a token at all, is the next step here.
+/**
+   * A read-only grant does not get the writing tools at all.
+   *
+   * Hiding them beats registering them and failing: an agent that cannot see
+   * `delete_task` will not plan around it, whereas one that can see it will try
+   * and then have to explain itself.
    */
   app.all("/mcp", async (c) => {
     const store = await context.accounts.of(c.get("session").user.id);
     return handleMcpRequest(c.req.raw, {
       store,
+      writable: canWrite(c.get("scopes")),
       ...(context.jsonSchemaValidator !== undefined
         ? { jsonSchemaValidator: context.jsonSchemaValidator }
         : {}),

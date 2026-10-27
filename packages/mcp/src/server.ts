@@ -35,6 +35,16 @@ issuing moves one at a time.`;
 
 export interface CreateServerOptions {
   /**
+   * Whether the caller may change anything.
+   *
+   * A read-only grant does not get the writing tools registered at all, rather
+   * than getting them and being refused. An agent that cannot see a tool will
+   * not plan around it; one that can see it will try, fail, and have to explain
+   * itself to the person waiting. Defaults to true, which is what stdio and an
+   * unscoped session token both get.
+   */
+  writable?: boolean;
+  /**
    * Which JSON Schema validator to use.
    *
    * The SDK defaults to AJV, which compiles schemas with `new Function` and so
@@ -58,7 +68,10 @@ export function createServer(
     },
   );
 
+  const writable = options.writable ?? true;
+
   for (const tool of buildTools()) {
+    if (!writable && !tool.readOnly) continue;
     server.registerTool(
       tool.name,
       {

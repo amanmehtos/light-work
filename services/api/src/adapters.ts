@@ -7,6 +7,7 @@
  * the server — see docs/hosting.md.
  */
 
+import { parseScopes } from "@light/server-core";
 import type {
   AccountStore,
   AccountStores,
@@ -16,7 +17,11 @@ import type {
   LoginCode,
   Mailer,
   MailResult,
+  OAuthClient,
+  OAuthCode,
+  OAuthTokenRecord,
   Realtime,
+  ResolvedOAuthToken,
   ResolvedSession,
   SessionRecord,
   Snapshot,
@@ -183,10 +188,169 @@ export class D1AuthStore implements AuthStore {
     await this.db.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(tokenHash).run();
   }
 
+  /* ---------------------------------------------------------------- */
+  /* OAuth                                                             */
+  /* ---------------------------------------------------------------- */
+
+  async registerClient(client: OAuthClient): Promise<void> {
+    await this.db
+      .prepare(
+        "INSERT INTO oauth_clients (id, name, redirect_uris, created_at) VALUES (?, ?, ?, ?)",
+      )
+      .bind(client.id, client.name, JSON.stringify(client.redirectUris), client.createdAt)
+      .run();
+  }
+
+  async findClient(id: string): Promise<OAuthClient | null> {
+    const row = await this.db
+      .prepare("SELECT id, name, redirect_uris, created_at FROM oauth_clients WHERE id = ?")
+      .bind(id)
+      .first<{ id: string; name: string; redirect_uris: string; created_at: string }>();
+    if (row === null) return null;
+    return {
+      id: row.id,
+      name: row.name,
+      redirectUris: JSON.parse(row.redirect_uris) as string[],
+      createdAt: row.created_at,
+    };
+  }
+
+  async putCode(code: OAuthCode): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO oauth_codes
+           (code_hash, client_id, user_id, redirect_uri, code_challenge, scope, resource, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        code.codeHash,
+        code.clientId,
+        code.userId,
+        code.redirectUri,
+        code.codeChallenge,
+        code.scope,
+        code.resource,
+        code.expiresAt,
+      )
+      .run();
+  }
+
+  /** Read and delete in one batch: a code is good for exactly one attempt. */
+  async takeCode(codeHash: string): Promise<OAuthCode | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT client_id, user_id, redirect_uri, code_challenge, scope, resource, expires_at
+           FROM oauth_codes WHERE code_hash = ?`,
+      )
+      .bind(codeHash)
+      .first<{
+        client_id: string;
+        user_id: string;
+        redirect_uri: string;
+        code_challenge: string;
+        scope: string;
+        resource: string;
+        expires_at: string;
+      }>();
+    await this.db.prepare("DELETE FROM oauth_codes WHERE code_hash = ?").bind(codeHash).run();
+    if (row === null) return null;
+    return {
+      codeHash,
+      clientId: row.client_id,
+      userId: row.user_id,
+      redirectUri: row.redirect_uri,
+      codeChallenge: row.code_challenge,
+      scope: row.scope,
+      resource: row.resource,
+      expiresAt: row.expires_at,
+    };
+  }
+
+  async createToken(token: OAuthTokenRecord): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO oauth_tokens
+           (token_hash, refresh_hash, client_id, user_id, scope, resource, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        token.tokenHash,
+        token.refreshHash,
+        token.clientId,
+        token.userId,
+        token.scope,
+        token.resource,
+        new Date().toISOString(),
+        token.expiresAt,
+      )
+      .run();
+  }
+
+  async findToken(tokenHash: string): Promise<ResolvedOAuthToken | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT t.client_id, t.scope, t.resource, t.expires_at AS expiresAt, u.id, u.email, u.name
+           FROM oauth_tokens t JOIN users u ON u.id = t.user_id
+          WHERE t.token_hash = ?`,
+      )
+      .bind(tokenHash)
+      .first<{
+        client_id: string;
+        scope: string;
+        resource: string;
+        expiresAt: string;
+        id: string;
+        email: string;
+        name: string;
+      }>();
+    if (row === null) return null;
+    return {
+      user: { id: row.id, email: row.email, name: row.name },
+      clientId: row.client_id,
+      scopes: parseScopes(row.scope),
+      resource: row.resource,
+      expiresAt: row.expiresAt,
+    };
+  }
+
+  async findTokenByRefresh(refreshHash: string): Promise<OAuthTokenRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT token_hash, refresh_hash, client_id, user_id, scope, resource, expires_at
+           FROM oauth_tokens WHERE refresh_hash = ?`,
+      )
+      .bind(refreshHash)
+      .first<{
+        token_hash: string;
+        refresh_hash: string | null;
+        client_id: string;
+        user_id: string;
+        scope: string;
+        resource: string;
+        expires_at: string;
+      }>();
+    if (row === null) return null;
+    return {
+      tokenHash: row.token_hash,
+      refreshHash: row.refresh_hash,
+      clientId: row.client_id,
+      userId: row.user_id,
+      scope: row.scope,
+      resource: row.resource,
+      expiresAt: row.expires_at,
+    };
+  }
+
+  async deleteToken(tokenHash: string): Promise<void> {
+    await this.db.prepare("DELETE FROM oauth_tokens WHERE token_hash = ?").bind(tokenHash).run();
+  }
+
   async pruneExpired(nowIso: string): Promise<void> {
     await this.db.batch([
       this.db.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(nowIso),
       this.db.prepare("DELETE FROM login_codes WHERE expires_at < ?").bind(nowIso),
+      this.db.prepare("DELETE FROM oauth_codes WHERE expires_at < ?").bind(nowIso),
+      this.db.prepare("DELETE FROM oauth_tokens WHERE expires_at < ?").bind(nowIso),
     ]);
   }
 }

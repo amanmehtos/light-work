@@ -2,6 +2,7 @@ export * from "./app.js";
 export * from "./auth.js";
 export * from "./google.js";
 export * from "./mcp.js";
+export * from "./oauth.js";
 export * from "./ports.js";
 export * from "./sql.js";
 export * from "./adapters/memory.js";

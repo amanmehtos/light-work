@@ -5,30 +5,76 @@ in two forms. Both serve the same tools.
 
 ## Remote (hosted)
 
-`POST https://<your-api>/mcp`, authenticated with the same bearer session token
-as the rest of the API. Stateless: each request catches up from the account,
-runs the call, and discards everything.
+`POST https://light-week.amanmehtos.workers.dev/mcp`. Stateless: each request catches up
+from the account, runs the call, and discards everything.
 
-In Claude Code:
+Give the URL to the client and let it do the rest — in Claude Desktop that is
+**Settings → Connectors → Add custom connector**, and the same URL works in
+claude.ai, Cursor and Zed. The server registers the client itself (RFC 7591),
+sends you to a consent screen in the browser, and hands back a token scoped to
+what you allowed. Nothing is copied and pasted.
+
+```
+https://light-week.amanmehtos.workers.dev/mcp
+```
+
+### What you are granting
+
+| Scope | What it allows |
+| --- | --- |
+| `mcp:read` | The six reading tools: projects, tasks, labels, the week plan, focus stats |
+| `mcp:write` | The nine that change things, including `delete_task`, which cascades |
+
+A read-only grant does not get the writing tools **registered at all**, rather
+than getting them and being refused. An agent that cannot see `delete_task`
+will not plan around it; one that can see it will try, fail, and then have to
+explain itself to whoever is waiting.
+
+The consent screen names the client, the scopes in plain words, and the address
+the code is about to be sent to — which is the one detail that decides whether
+any of it is safe.
+
+### Revoking
+
+Signing out revokes every grant along with the session. There is no screen yet
+for revoking one agent and keeping another; that is the next piece of work here.
+
+### Claude Code, or anything that can set a header
+
+Claude Code takes a header directly, so it can skip the handshake and use a
+session token — the one the web app keeps in `localStorage` under
+`light-week.token`:
 
 ```sh
-claude mcp add --transport http light-week https://<your-api>/mcp \
+claude mcp add --transport http light-week https://light-week.amanmehtos.workers.dev/mcp \
   --header "Authorization: Bearer <session token>"
 ```
+
+That path still works and is not deprecated, but it is the blunter instrument: a
+session token carries no scope and no audience, so it is the whole account.
+Prefer OAuth where the client supports it.
 
 ## Local (stdio)
 
 For an agent on your own machine. Talks to the API over HTTP and keeps a warm
-local copy, refreshed every thirty seconds.
+local copy, refreshed every thirty seconds. STDIO transports take credentials
+from the environment rather than doing OAuth, which is what the MCP spec asks
+for.
 
 ```sh
-LIGHT_WEEK_URL=https://<your-api> \
+LIGHT_WEEK_URL=https://light-week.amanmehtos.workers.dev \
 LIGHT_WEEK_TOKEN=<session token> \
 LIGHT_WEEK_TZ=Asia/Bangkok \
-  npx light-week-mcp
+  light-week-mcp
 ```
 
 It refuses to start on a bad token rather than failing on the first tool call.
+
+> **This one does not run yet.** `@light/mcp` is a private workspace package: it
+> is not published to npm, so `npx light-week-mcp` fails, its `bin` points at a
+> `.ts` file, and there is no build script to turn it into something `node` can
+> execute. Either publish it or add a bundle step first. The hosted transport
+> above has no such problem.
 
 ## Tools
 
@@ -91,6 +137,11 @@ Read-only tools are annotated `readOnlyHint: true`, so a host can run them
 without confirmation and prompt on the rest. `delete_task` cascades and is not
 recoverable through the API — it is annotated non-idempotent for that reason.
 
-The endpoint authenticates with a session token today. Proper OAuth, which lets
-a user grant an agent scoped access without handing over a token at all, is the
-next piece of work here.
+The endpoint speaks OAuth 2.1: PKCE (S256 only — OAuth 2.1 drops `plain`),
+dynamic client registration, rotating refresh tokens, and RFC 9728 metadata at
+`/.well-known/oauth-protected-resource` so a client can find all of that from a
+401 alone. Tokens are bound to an audience (RFC 8707) and checked against it on
+every request, so a token minted for another resource is refused here.
+
+Access and refresh tokens are stored only as a SHA-256 hash, like sessions and
+sign-in codes: a database leak does not hand over live credentials.

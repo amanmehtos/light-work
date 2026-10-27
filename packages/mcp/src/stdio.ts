@@ -7,8 +7,10 @@
  *   light-week-mcp
  *
  * In Claude Code or Claude Desktop, register it as a command-type server with
- * those two variables set. The token is the same session token the apps use;
- * mint one from Settings, not by reusing a browser session.
+ * those two variables set. The token is the same session token the apps use,
+ * read from localStorage under `light-week.token` — there is no screen for
+ * minting a separate one yet. An agent that can do OAuth should use the hosted
+ * transport instead, which grants a scoped token rather than the whole account.
  */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
