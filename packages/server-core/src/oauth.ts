@@ -17,7 +17,9 @@
 
 import { sha256 } from "./auth.js";
 import {
+  MCP_SCOPES,
   OAUTH_SCOPES,
+  TASK_SCOPES,
   type OAuthClient,
   type OAuthScope,
   type OAuthStore,
@@ -84,6 +86,21 @@ export function canWrite(scopes: readonly OAuthScope[]): boolean {
   return scopes.includes("mcp:write");
 }
 
+/**
+ * The same pair for the sync API.
+ *
+ * Kept separate from {@link canWrite} rather than generalised into one
+ * predicate: the two endpoints should not be able to drift into sharing a
+ * check, because the day they do, widening one silently widens the other.
+ */
+export function canReadTasks(scopes: readonly OAuthScope[]): boolean {
+  return scopes.includes("tasks:read") || scopes.includes("tasks:write");
+}
+
+export function canWriteTasks(scopes: readonly OAuthScope[]): boolean {
+  return scopes.includes("tasks:write");
+}
+
 /* ------------------------------------------------------------------ */
 /* PKCE                                                               */
 /* ------------------------------------------------------------------ */
@@ -115,31 +132,66 @@ export function canonicalResource(origin: string): string {
   return `${origin.replace(/\/+$/, "")}/mcp`;
 }
 
+/** The canonical URI of the sync API, for a first-party app's audience. */
+export function syncResource(origin: string): string {
+  return `${origin.replace(/\/+$/, "")}/sync`;
+}
+
 /**
  * Whether a client's `resource` names this server.
  *
- * Accepts the origin on its own as well as the full MCP path: the spec's
+ * Accepts the origin on its own as well as either resource path: the spec's
  * examples allow either, and a client that sends the bare origin is not wrong.
+ *
+ * Deliberately does NOT distinguish the two paths. Both are surfaces of one
+ * server, so a token minted here has this server as its audience either way;
+ * what separates the MCP endpoint from the sync API is the scope on the grant,
+ * checked at each route. Treating the paths as separate audiences here would
+ * read as a second security boundary that is not actually enforced.
  */
 export function resourceMatches(resource: string | undefined | null, origin: string): boolean {
   if (resource === undefined || resource === null || resource === "") return false;
   const normalise = (value: string): string => value.replace(/\/+$/, "").toLowerCase();
   const target = normalise(resource);
-  return target === normalise(canonicalResource(origin)) || target === normalise(origin);
+  return (
+    target === normalise(canonicalResource(origin)) ||
+    target === normalise(syncResource(origin)) ||
+    target === normalise(origin)
+  );
 }
 
 /* ------------------------------------------------------------------ */
 /* Discovery documents                                                */
 /* ------------------------------------------------------------------ */
 
-/** RFC 9728. What a client fetches after the 401 tells it where to look. */
-export function protectedResourceMetadata(origin: string): Record<string, unknown> {
+/** Which of this server's two protected resources a document or challenge is about. */
+export type ProtectedResource = "mcp" | "sync";
+
+const RESOURCE_METADATA_PATH: Record<ProtectedResource, string> = {
+  mcp: "/.well-known/oauth-protected-resource",
+  sync: "/.well-known/oauth-protected-resource/sync",
+};
+
+/**
+ * RFC 9728. What a client fetches after the 401 tells it where to look.
+ *
+ * Each resource advertises only the scopes that mean anything to it, so a
+ * client reading the sync document is never offered `mcp:write` — asking for a
+ * scope the endpoint ignores is a confusing thing to let a client do.
+ */
+export function protectedResourceMetadata(
+  origin: string,
+  resource: ProtectedResource = "mcp",
+): Record<string, unknown> {
+  const sync = resource === "sync";
   return {
-    resource: canonicalResource(origin),
+    resource: sync ? syncResource(origin) : canonicalResource(origin),
     authorization_servers: [origin],
-    scopes_supported: [...OAUTH_SCOPES],
+    scopes_supported: sync ? [...TASK_SCOPES] : [...MCP_SCOPES],
     bearer_methods_supported: ["header"],
-    resource_documentation: "https://github.com/amanmehtos/light-work/blob/main/docs/mcp.md",
+    resource_documentation: sync
+      ? "https://github.com/amanmehtos/light-work/blob/main/docs/apps.md"
+      : "https://github.com/amanmehtos/light-work/blob/main/docs/mcp.md",
   };
 }
 
@@ -163,14 +215,80 @@ export function authorizationServerMetadata(origin: string): Record<string, unkn
   };
 }
 
-/** The challenge on a 401, which is how a client discovers all of the above. */
-export function wwwAuthenticate(origin: string, error?: string, scope?: string): string {
+/**
+ * The challenge on a 401, which is how a client discovers all of the above.
+ *
+ * `resource` picks which metadata document to point at, so an app that knocks
+ * on the sync API is sent to the sync document and is told to ask for
+ * `tasks:*` — not for the MCP scopes, which would get it a token this endpoint
+ * refuses.
+ */
+export function wwwAuthenticate(
+  origin: string,
+  error?: string,
+  options: { scope?: string; resource?: ProtectedResource } = {},
+): string {
+  const resource = options.resource ?? "mcp";
+  const scopes = resource === "sync" ? TASK_SCOPES : MCP_SCOPES;
   const parts = [
-    `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
-    `scope="${scope ?? formatScopes(OAUTH_SCOPES)}"`,
+    `Bearer resource_metadata="${origin}${RESOURCE_METADATA_PATH[resource]}"`,
+    `scope="${options.scope ?? formatScopes(scopes)}"`,
   ];
   if (error !== undefined) parts.push(`error="${error}"`);
   return parts.join(", ");
+}
+
+/* ------------------------------------------------------------------ */
+/* First-party clients                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The apps that ship as part of Light Week.
+ *
+ * Held in code rather than seeded by migration. A client list is
+ * configuration, and a migration would put these rows in D1 while leaving them
+ * absent from the node:sqlite target — the same build behaving differently
+ * depending on where it runs, which is the kind of difference you discover in
+ * the wrong environment.
+ *
+ * Being built in also means the consent screen shows a name this server
+ * vouches for. Everything registered through RFC 7591 is self-asserted: a
+ * client may call itself whatever it likes, so "Light Week for iOS" on the
+ * consent screen would otherwise prove nothing.
+ *
+ * Redirect URIs use the single-slash `scheme:/path` form of RFC 8252 and are
+ * compared exactly by {@link redirectUriAllowed}.
+ */
+export const FIRST_PARTY_CLIENTS: readonly OAuthClient[] = [
+  {
+    id: "com.lightweek.ios",
+    name: "Light Week for iOS",
+    redirectUris: ["com.lightweek.app:/oauth"],
+    createdAt: "2026-10-28T00:00:00.000Z",
+  },
+  {
+    id: "com.lightminute.ios",
+    name: "Light Minute for iOS",
+    redirectUris: ["com.lightminute.app:/oauth"],
+    createdAt: "2026-10-28T00:00:00.000Z",
+  },
+];
+
+/**
+ * Resolves a client id to either a built-in app or a registered one.
+ *
+ * Built-ins win on a tie, though a tie cannot currently happen: registration
+ * mints its own `c_`-prefixed id via `newClientId` and never honours a
+ * requested one, so a registrant has no way to claim a reverse-DNS id. The
+ * ordering is there so that stays true if registration ever accepts an id.
+ */
+export async function findAnyClient(
+  store: Pick<OAuthStore, "findClient">,
+  id: string,
+): Promise<OAuthClient | null> {
+  const builtIn = FIRST_PARTY_CLIENTS.find((client) => client.id === id);
+  if (builtIn !== undefined) return builtIn;
+  return store.findClient(id);
 }
 
 /* ------------------------------------------------------------------ */

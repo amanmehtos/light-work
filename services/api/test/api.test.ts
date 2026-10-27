@@ -535,6 +535,89 @@ describe("OAuth on D1", () => {
     return (await response.json<{ client_id: string }>()).client_id;
   }
 
+  /**
+   * The first-party app path, end to end on D1.
+   *
+   * Worth its own case because the app grant touches a different column of the
+   * same rows — `scope` holding `tasks:*` rather than `mcp:*` — and because the
+   * built-in clients are resolved from code while everything around them comes
+   * out of the database. A mismatch there would mean the apps could not sign in
+   * against production while passing every in-memory test.
+   */
+  it("grants a built-in app access to sync, and holds the line on scope", async () => {
+    const { token: sessionToken } = await signIn();
+    const clientId = "com.lightminute.ios";
+    const redirect = "com.lightminute.app:/oauth";
+
+    const authorize = await SELF.fetch(
+      `https://api.test/oauth/authorize?response_type=code&client_id=${clientId}` +
+        `&redirect_uri=${encodeURIComponent(redirect)}` +
+        `&code_challenge=${CHALLENGE}&code_challenge_method=S256&scope=tasks%3Aread`,
+      { redirect: "manual" },
+    );
+    expect(authorize.status).toBe(302);
+    const consent = new URL(authorize.headers.get("location") ?? "");
+    expect(consent.searchParams.get("client_name")).toBe("Light Minute for iOS");
+
+    const approved = await SELF.fetch(
+      "https://api.test/oauth/approve",
+      authed(sessionToken, {
+        method: "POST",
+        body: JSON.stringify({
+          approve: true,
+          client_id: clientId,
+          redirect_uri: redirect,
+          code_challenge: consent.searchParams.get("code_challenge"),
+          scope: consent.searchParams.get("scope"),
+          resource: consent.searchParams.get("resource"),
+        }),
+      }),
+    );
+    const { redirect: back } = await approved.json<{ redirect: string }>();
+    const code = new URL(back).searchParams.get("code") ?? "";
+
+    const tokenResponse = await SELF.fetch("https://api.test/oauth/token", {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id: clientId,
+        redirect_uri: redirect,
+        code_verifier: VERIFIER,
+      }),
+    });
+    expect(tokenResponse.status).toBe(200);
+    const tokens = await tokenResponse.json<{ access_token: string; scope: string }>();
+    expect(tokens.scope).toBe("tasks:read");
+
+    const snapshot = await SELF.fetch("https://api.test/sync/snapshot", {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+    expect(snapshot.status).toBe(200);
+
+    // Read-only means read-only, all the way down to D1.
+    const push = await SELF.fetch("https://api.test/sync", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokens.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ version: 1, since: 0, ops: [] }),
+    });
+    expect(push.status).toBe(403);
+  });
+
+  it("serves the sync resource document", async () => {
+    const response = await SELF.fetch(
+      "https://api.test/.well-known/oauth-protected-resource/sync",
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const body = await response.json<{ resource: string; scopes_supported: string[] }>();
+    expect(body.resource).toBe("https://api.test/sync");
+    expect(body.scopes_supported).toEqual(["tasks:read", "tasks:write"]);
+  });
+
   it("registers, grants, exchanges and then serves MCP", async () => {
     const { token: sessionToken } = await signIn();
     const clientId = await registerClient();

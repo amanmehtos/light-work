@@ -25,6 +25,11 @@ https://light-week.amanmehtos.workers.dev/mcp
 | `mcp:read` | The six reading tools: projects, tasks, labels, the week plan, focus stats |
 | `mcp:write` | The ten that change things, including the two deletes, which cascade |
 
+These two scopes govern this endpoint only. The first-party iOS apps use a
+separate family, `tasks:read` / `tasks:write`, against the sync API — see
+[apps.md](apps.md). An `mcp:*` grant is refused there and a `tasks:*` grant gets
+no tools here: one server, two surfaces, told apart by scope.
+
 A read-only grant does not get the writing tools **registered at all**, rather
 than getting them and being refused. An agent that cannot see `delete_task`
 will not plan around it; one that can see it will try, fail, and then have to

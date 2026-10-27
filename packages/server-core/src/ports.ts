@@ -89,15 +89,29 @@ export interface ResolvedSession {
 /* ------------------------------------------------------------------ */
 
 /**
- * The scopes this server issues.
+ * The scopes this server issues, in two families.
  *
- * They line up with the `readOnly` flag every MCP tool already carries, so a
- * grant is enforced by which tools are registered at all rather than by a
- * check inside each one.
+ * `mcp:*` governs the agent endpoint. They line up with the `readOnly` flag
+ * every MCP tool already carries, so a grant is enforced by which tools are
+ * registered at all rather than by a check inside each one.
+ *
+ * `tasks:*` governs the sync API that the first-party iOS apps use. It is a
+ * separate family because it is a different surface with a different shape of
+ * risk: an agent calling tools is not the same thing as an app holding the
+ * whole account and pushing ops.
+ *
+ * The two are told apart by **scope, not audience**. Both surfaces belong to
+ * one server, so they share an audience, and RFC 8707's check only answers
+ * "was this token minted for this server" — not "for which of its endpoints".
+ * That second question is what these scopes are for.
  */
-export type OAuthScope = "mcp:read" | "mcp:write";
+export type McpScope = "mcp:read" | "mcp:write";
+export type TaskScope = "tasks:read" | "tasks:write";
+export type OAuthScope = McpScope | TaskScope;
 
-export const OAUTH_SCOPES: readonly OAuthScope[] = ["mcp:read", "mcp:write"];
+export const MCP_SCOPES: readonly McpScope[] = ["mcp:read", "mcp:write"];
+export const TASK_SCOPES: readonly TaskScope[] = ["tasks:read", "tasks:write"];
+export const OAUTH_SCOPES: readonly OAuthScope[] = [...MCP_SCOPES, ...TASK_SCOPES];
 
 /**
  * A client registered dynamically (RFC 7591).

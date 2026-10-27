@@ -24,6 +24,14 @@ const SCOPE_TEXT: Record<string, { title: string; detail: string }> = {
     title: "Change your tasks",
     detail: "Add, edit, complete, reorder and delete — including subtasks.",
   },
+  "tasks:read": {
+    title: "Read your tasks",
+    detail: "Sync your whole account down, so the app can show it while offline.",
+  },
+  "tasks:write": {
+    title: "Change your tasks, and record focus time",
+    detail: "Add, edit, complete and delete, and log focus sessions against a task.",
+  },
 };
 
 export function Consent({

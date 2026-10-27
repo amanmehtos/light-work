@@ -24,9 +24,12 @@ import {
 import { authorizeUrl, exchangeCode, verifyState } from "./google.js";
 import {
   authorizationServerMetadata,
+  canReadTasks,
   canWrite,
+  canWriteTasks,
   canonicalResource,
   exchangeAuthorizationCode,
+  findAnyClient,
   formatScopes,
   issueCode,
   parseScopes,
@@ -47,6 +50,15 @@ type Vars = {
   token: string;
   /** What the credential is allowed to do. A session token gets everything. */
   scopes: OAuthScope[];
+  /**
+   * Which kind of credential authenticated the request.
+   *
+   * Needed because a few routes are about the credential itself rather than
+   * about the account: signing out revokes a *session*, and an app holding an
+   * OAuth grant asking to sign out would otherwise look like it had succeeded
+   * while nothing happened.
+   */
+  grant: "session" | "oauth";
 };
 
 export interface AppOptions extends ServerContext {
@@ -206,23 +218,75 @@ export function createApp(context: AppOptions) {
    */
   const SELF_AUTHENTICATING = new Set(["/sync/socket"]);
 
+  const originOf = (c: { req: { url: string } }): string => new URL(c.req.url).origin;
+
   const bearerAuth = createMiddleware<{ Variables: Vars }>(async (c, next) => {
     if (SELF_AUTHENTICATING.has(new URL(c.req.url).pathname)) {
       await next();
       return;
     }
 
+    const origin = originOf(c);
     const header = c.req.header("Authorization");
     const token = header?.startsWith("Bearer ") === true ? header.slice(7) : undefined;
+
+    const challenge = (error: string, description: string, status = 401): Response =>
+      new Response(JSON.stringify({ error: description }), {
+        status,
+        headers: {
+          "Content-Type": "application/json; charset=UTF-8",
+          // Points at the sync document, not the MCP one: an app that knocks
+          // here must be told to ask for tasks:*, or it comes back with a
+          // token these routes refuse.
+          "WWW-Authenticate": wwwAuthenticate(origin, error, { resource: "sync" }),
+        },
+      });
+
     if (token === undefined || token === "") {
-      return c.json({ error: "missing bearer token" }, 401);
+      return challenge("invalid_request", "missing bearer token");
     }
+
+    // Session first, unlike mcpAuth: this is the web app's hot path, and every
+    // request it makes would otherwise pay for a failed OAuth lookup.
     const session = await resolveSession(context.auth, token, now());
-    if (session === null) {
-      return c.json({ error: "invalid or expired session" }, 401);
+    if (session !== null) {
+      c.set("session", session);
+      c.set("token", token);
+      c.set("scopes", [...OAUTH_SCOPES]);
+      c.set("grant", "session");
+      await next();
+      return;
     }
-    c.set("session", session);
+
+    const granted = await resolveOAuthToken(context.auth, token, now());
+    if (granted === null) return challenge("invalid_token", "invalid or expired token");
+    if (!resourceMatches(granted.resource, origin)) {
+      return challenge("invalid_token", "token was issued for another resource");
+    }
+    if (!canReadTasks(granted.scopes)) {
+      // 403, not 401: the credential is good, it simply does not cover this.
+      // Re-authenticating with the same grant would change nothing.
+      return challenge("insufficient_scope", "this grant does not cover the sync API", 403);
+    }
+    c.set("session", { user: granted.user, expiresAt: granted.expiresAt });
     c.set("token", token);
+    c.set("scopes", granted.scopes);
+    c.set("grant", "oauth");
+    await next();
+  });
+
+  /**
+   * For routes that act on the credential itself, or hand out new ones.
+   *
+   * `bearerAuth` now also admits an app's OAuth token, which is right for
+   * reading and changing tasks and wrong for everything here: granting access
+   * and signing out are the user's own acts. A grant that could mint further
+   * grants would let one authorised app quietly widen its own reach.
+   */
+  const sessionOnly = createMiddleware<{ Variables: Vars }>(async (c, next) => {
+    if (c.get("grant") !== "session") {
+      return c.json({ error: "this endpoint needs a signed-in session, not an app grant" }, 403);
+    }
     await next();
   });
 
@@ -238,8 +302,6 @@ export function createApp(context: AppOptions) {
   /* point is to fit on a free plan.                                  */
   /* ---------------------------------------------------------------- */
 
-  const originOf = (c: { req: { url: string } }): string => new URL(c.req.url).origin;
-
   /** RFC 9728. How a client gets from a 401 to an authorization server. */
   app.get("/.well-known/oauth-protected-resource", (c) =>
     c.json(protectedResourceMetadata(originOf(c))),
@@ -248,6 +310,11 @@ export function createApp(context: AppOptions) {
   /** The same document under the resource path, which some clients prefer. */
   app.get("/.well-known/oauth-protected-resource/mcp", (c) =>
     c.json(protectedResourceMetadata(originOf(c))),
+  );
+
+  /** The same, for the sync API the first-party apps use. */
+  app.get("/.well-known/oauth-protected-resource/sync", (c) =>
+    c.json(protectedResourceMetadata(originOf(c), "sync")),
   );
 
   /** RFC 8414. */
@@ -292,7 +359,7 @@ export function createApp(context: AppOptions) {
     const query = c.req.query();
     const origin = originOf(c);
 
-    const client = await context.auth.findClient(query.client_id ?? "");
+    const client = await findAnyClient(context.auth, query.client_id ?? "");
     if (client === null) {
       return c.json({ error: "invalid_client", error_description: "unknown client" }, 400);
     }
@@ -351,13 +418,13 @@ export function createApp(context: AppOptions) {
    * Authenticated with the session, which is what proves who is granting. Every
    * parameter is re-checked here rather than trusted from the redirect.
    */
-  app.post("/oauth/approve", bearerAuth, async (c) => {
+  app.post("/oauth/approve", bearerAuth, sessionOnly, async (c) => {
     const origin = originOf(c);
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 
     const clientId = typeof body.client_id === "string" ? body.client_id : "";
     const redirectUri = typeof body.redirect_uri === "string" ? body.redirect_uri : "";
-    const client = await context.auth.findClient(clientId);
+    const client = await findAnyClient(context.auth, clientId);
     if (client === null || !redirectUriAllowed(client, redirectUri)) {
       return c.json({ error: "invalid_request" }, 400);
     }
@@ -490,6 +557,7 @@ export function createApp(context: AppOptions) {
       c.set("session", { user: granted.user, expiresAt: granted.expiresAt });
       c.set("token", token);
       c.set("scopes", granted.scopes);
+      c.set("grant", "oauth");
       await next();
       return;
     }
@@ -499,6 +567,7 @@ export function createApp(context: AppOptions) {
     c.set("session", session);
     c.set("token", token);
     c.set("scopes", [...OAUTH_SCOPES]);
+    c.set("grant", "session");
     await next();
   });
 
@@ -506,7 +575,7 @@ export function createApp(context: AppOptions) {
 
   app.get("/account/me", (c) => c.json(c.get("session").user));
 
-  app.post("/account/logout", async (c) => {
+  app.post("/account/logout", sessionOnly, async (c) => {
     await revokeSession(context.auth, c.get("token"));
     return c.json({ ok: true });
   });
@@ -535,6 +604,12 @@ export function createApp(context: AppOptions) {
   });
 
   app.post("/sync", async (c) => {
+    // Reading the account and changing it are different grants. A session
+    // token holds both; an app may hold only tasks:read.
+    if (!canWriteTasks(c.get("scopes"))) {
+      return c.json({ error: "this grant is read-only; tasks:write is required to push" }, 403);
+    }
+
     const body = await c.req
       .json<{ version?: number; since?: number; ops?: Op[] }>()
       .catch(() => null);

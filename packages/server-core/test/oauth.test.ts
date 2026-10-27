@@ -7,11 +7,18 @@ import {
   MemoryRealtime,
 } from "../src/adapters/memory.js";
 import {
+  canReadTasks,
+  canWriteTasks,
   canonicalResource,
+  findAnyClient,
+  issueTokens,
   parseScopes,
+  protectedResourceMetadata,
   resourceMatches,
+  syncResource,
   validateRegistration,
   verifyPkce,
+  wwwAuthenticate,
 } from "../src/oauth.js";
 
 /**
@@ -27,12 +34,14 @@ import {
 const ORIGIN = "https://api.test";
 
 let app: ReturnType<typeof createApp>;
+let auth: MemoryAuthStore;
 let seq = 0;
 
 beforeEach(() => {
+  auth = new MemoryAuthStore();
   app = createApp({
     accounts: new MemoryAccountStores(),
-    auth: new MemoryAuthStore(),
+    auth,
     realtime: new MemoryRealtime(),
     mailer: new DevMailer(),
     platform: "test",
@@ -93,17 +102,30 @@ async function registerClient(): Promise<string> {
   return (await json(response)).client_id as string;
 }
 
-/** Runs the whole handshake and returns the token response body. */
-async function grant(scope = "mcp:read mcp:write"): Promise<any> {
+/**
+ * Runs the whole handshake and returns the token response body.
+ *
+ * `clientId` may name a built-in app, in which case registration is skipped —
+ * which is the point of a built-in — and `redirect` must be the one it ships
+ * with, because redirect URIs are compared exactly.
+ */
+async function grant(
+  scope = "mcp:read mcp:write",
+  options: { resource?: string; clientId?: string; redirect?: string } = {},
+): Promise<any> {
   const sessionToken = await signIn();
-  const clientId = await registerClient();
+  const clientId = options.clientId ?? (await registerClient());
+  const redirectUri = options.redirect ?? REDIRECT;
 
   const authorize = await app.fetch(
     request(
       `/oauth/authorize?response_type=code&client_id=${clientId}` +
-        `&redirect_uri=${encodeURIComponent(REDIRECT)}` +
+        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
         `&code_challenge=${CHALLENGE}&code_challenge_method=S256` +
-        `&scope=${encodeURIComponent(scope)}&state=xyz`,
+        `&scope=${encodeURIComponent(scope)}&state=xyz` +
+        (options.resource === undefined
+          ? ""
+          : `&resource=${encodeURIComponent(options.resource)}`),
     ),
   );
   expect(authorize.status).toBe(302);
@@ -117,7 +139,7 @@ async function grant(scope = "mcp:read mcp:write"): Promise<any> {
       body: JSON.stringify({
         approve: true,
         client_id: clientId,
-        redirect_uri: REDIRECT,
+        redirect_uri: redirectUri,
         code_challenge: consent.searchParams.get("code_challenge"),
         scope: consent.searchParams.get("scope"),
         resource: consent.searchParams.get("resource"),
@@ -135,7 +157,7 @@ async function grant(scope = "mcp:read mcp:write"): Promise<any> {
         grant_type: "authorization_code",
         code,
         client_id: clientId,
-        redirect_uri: REDIRECT,
+        redirect_uri: redirectUri,
         code_verifier: VERIFIER,
       }),
     }),
@@ -481,5 +503,229 @@ describe("scope enforcement", () => {
   it("treats a plain session token as a full grant, as it was before", async () => {
     const names = await toolNames(await signIn());
     expect(names).toContain("delete_task");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* First-party apps on the sync API                                   */
+/* ------------------------------------------------------------------ */
+
+const LM = { clientId: "com.lightminute.ios", redirect: "com.lightminute.app:/oauth" };
+
+describe("task scopes", () => {
+  it("treats write as implying read, and read as not implying write", () => {
+    expect(canReadTasks(["tasks:read"])).toBe(true);
+    expect(canReadTasks(["tasks:write"])).toBe(true);
+    expect(canWriteTasks(["tasks:read"])).toBe(false);
+    expect(canWriteTasks(["tasks:write"])).toBe(true);
+  });
+
+  it("keeps the two scope families apart", () => {
+    // The whole point of the split: an agent grant is not an app grant.
+    expect(canReadTasks(["mcp:read", "mcp:write"])).toBe(false);
+    expect(canWriteTasks(["mcp:write"])).toBe(false);
+  });
+
+  it("parses the task scopes and still drops unknown ones", () => {
+    expect(parseScopes("tasks:read tasks:write")).toEqual(["tasks:read", "tasks:write"]);
+    expect(parseScopes("tasks:read nonsense:everything")).toEqual(["tasks:read"]);
+  });
+});
+
+describe("the sync resource", () => {
+  it("is accepted as naming this server, as are the origin and the MCP path", () => {
+    expect(resourceMatches(syncResource(ORIGIN), ORIGIN)).toBe(true);
+    expect(resourceMatches(canonicalResource(ORIGIN), ORIGIN)).toBe(true);
+    expect(resourceMatches(ORIGIN, ORIGIN)).toBe(true);
+  });
+
+  it("rejects another server's resource", () => {
+    expect(resourceMatches("https://elsewhere.test/sync", ORIGIN)).toBe(false);
+  });
+
+  it("advertises only the scopes that mean something to each resource", () => {
+    const mcp = protectedResourceMetadata(ORIGIN, "mcp");
+    const sync = protectedResourceMetadata(ORIGIN, "sync");
+    expect(mcp.resource).toBe("https://api.test/mcp");
+    expect(mcp.scopes_supported).toEqual(["mcp:read", "mcp:write"]);
+    expect(sync.resource).toBe("https://api.test/sync");
+    expect(sync.scopes_supported).toEqual(["tasks:read", "tasks:write"]);
+  });
+
+  it("points a challenge at the document for the resource being knocked on", () => {
+    const header = wwwAuthenticate(ORIGIN, "invalid_request", { resource: "sync" });
+    expect(header).toContain('resource_metadata="https://api.test/.well-known/oauth-protected-resource/sync"');
+    expect(header).toContain('scope="tasks:read tasks:write"');
+    // The MCP challenge is unchanged, which is what keeps the existing grant working.
+    expect(wwwAuthenticate(ORIGIN)).toContain(
+      'resource_metadata="https://api.test/.well-known/oauth-protected-resource"',
+    );
+  });
+
+  it("serves the sync document as JSON", async () => {
+    const response = await app.fetch(request("/.well-known/oauth-protected-resource/sync"));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect((await json(response)).resource).toBe("https://api.test/sync");
+  });
+});
+
+describe("built-in clients", () => {
+  it("resolves without ever having been registered", async () => {
+    const store = new MemoryAuthStore();
+    const client = await findAnyClient(store, "com.lightminute.ios");
+    expect(client?.name).toBe("Light Minute for iOS");
+    expect(client?.redirectUris).toEqual(["com.lightminute.app:/oauth"]);
+  });
+
+  it("still falls through to the store, and reports an unknown id as missing", async () => {
+    const store = new MemoryAuthStore();
+    await store.registerClient({
+      id: "c_registered",
+      name: "Some Agent",
+      redirectUris: ["http://127.0.0.1:1/cb"],
+      createdAt: new Date().toISOString(),
+    });
+    expect((await findAnyClient(store, "c_registered"))?.name).toBe("Some Agent");
+    expect(await findAnyClient(store, "c_nope")).toBeNull();
+  });
+
+  it("completes the whole handshake for Light Minute with no registration step", async () => {
+    const { status, body } = await grant("tasks:read tasks:write", LM);
+    expect(status).toBe(200);
+    expect(body.scope).toBe("tasks:read tasks:write");
+  });
+});
+
+describe("the sync API under an app's grant", () => {
+  async function appToken(scope: string): Promise<string> {
+    const { body } = await grant(scope, LM);
+    return body.access_token as string;
+  }
+
+  it("challenges an unauthenticated read towards the sync document", async () => {
+    const response = await app.fetch(request("/sync/snapshot"));
+    expect(response.status).toBe(401);
+    const header = response.headers.get("www-authenticate") ?? "";
+    expect(header).toContain("oauth-protected-resource/sync");
+    expect(header).toContain('scope="tasks:read tasks:write"');
+  });
+
+  it("lets a tasks:read grant read the account", async () => {
+    const response = await app.fetch(
+      request("/sync/snapshot", { headers: { Authorization: `Bearer ${await appToken("tasks:read")}` } }),
+    );
+    expect(response.status).toBe(200);
+    expect((await json(response)).version).toBe(1);
+  });
+
+  it("refuses a push from a tasks:read grant", async () => {
+    const response = await app.fetch(
+      request("/sync", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await appToken("tasks:read")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ version: 1, since: 0, ops: [] }),
+      }),
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it("accepts a push from a tasks:write grant", async () => {
+    const response = await app.fetch(
+      request("/sync", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await appToken("tasks:read tasks:write")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ version: 1, since: 0, ops: [] }),
+      }),
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it("refuses an MCP grant outright — it is not an app grant", async () => {
+    const { body } = await grant("mcp:read mcp:write", LM);
+    const response = await app.fetch(
+      request("/sync/snapshot", { headers: { Authorization: `Bearer ${body.access_token}` } }),
+    );
+    expect(response.status).toBe(403);
+    expect((await json(response)).error).toContain("sync API");
+  });
+
+  it("never issues a token for another server in the first place", async () => {
+    // The authorization endpoint bounces invalid_target, so the audience check
+    // below is a second line of defence rather than the only one.
+    const authorize = await app.fetch(
+      request(
+        `/oauth/authorize?response_type=code&client_id=${LM.clientId}` +
+          `&redirect_uri=${encodeURIComponent(LM.redirect)}` +
+          `&code_challenge=${CHALLENGE}&code_challenge_method=S256` +
+          `&scope=tasks%3Aread&state=xyz&resource=${encodeURIComponent("https://elsewhere.test/sync")}`,
+      ),
+    );
+    expect(authorize.status).toBe(302);
+    const location = new URL(authorize.headers.get("location") ?? "");
+    expect(location.searchParams.get("error")).toBe("invalid_target");
+  });
+
+  it("refuses a token whose audience is another server", async () => {
+    // Minted straight through the store, because the endpoints correctly
+    // refuse to produce one — this exercises the resource server's own check.
+    const session = await signIn();
+    const me = await json(
+      await app.fetch(request("/account/me", { headers: { Authorization: `Bearer ${session}` } })),
+    );
+    const { accessToken } = await issueTokens(auth, {
+      clientId: LM.clientId,
+      userId: me.id,
+      scope: "tasks:read tasks:write",
+      resource: "https://elsewhere.test/sync",
+    });
+
+    const response = await app.fetch(
+      request("/sync/snapshot", { headers: { Authorization: `Bearer ${accessToken}` } }),
+    );
+    expect(response.status).toBe(401);
+    expect((await json(response)).error).toContain("another resource");
+  });
+
+  it("will not let an app grant further grants", async () => {
+    // /oauth/approve is where access is handed out. An app holding a grant
+    // being able to mint more would let it widen its own reach.
+    const response = await app.fetch(
+      request("/oauth/approve", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await appToken("tasks:read tasks:write")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ approve: true, client_id: LM.clientId, redirect_uri: LM.redirect }),
+      }),
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it("will not let an app sign the account out", async () => {
+    const response = await app.fetch(
+      request("/account/logout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await appToken("tasks:read tasks:write")}` },
+      }),
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it("leaves the session token able to do all of it", async () => {
+    const session = await signIn();
+    const headers = { Authorization: `Bearer ${session}` };
+    expect((await app.fetch(request("/sync/snapshot", { headers }))).status).toBe(200);
+    expect((await app.fetch(request("/account/me", { headers }))).status).toBe(200);
+    expect(
+      (await app.fetch(request("/account/logout", { method: "POST", headers }))).status,
+    ).toBe(200);
   });
 });
