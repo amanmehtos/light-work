@@ -10,6 +10,7 @@
 
 const TOKEN_KEY = "light-week.token";
 const USER_KEY = "light-week.user";
+const METHODS_KEY = "light-week.methods";
 
 export interface User {
   id: string;
@@ -119,18 +120,36 @@ export async function verifyCode(email: string, code: string): Promise<StoredSes
 /** Where the browser goes to start Google sign-in. A full navigation, not fetch. */
 export const GOOGLE_START_URL = `${API_BASE}/auth/google/start`;
 
+/**
+ * What the last visit found, so the card can paint the right buttons
+ * immediately.
+ *
+ * Which methods exist is a property of the deployment, not of the visitor, and
+ * it changes about as often as a deploy — but it can only be learnt by asking
+ * the server. Rendering `false` until the answer arrives makes the Google
+ * button and its divider drop in afterwards and shove the form down. Starting
+ * from the last answer is right on every visit but the first, and the fetch
+ * still corrects it.
+ */
+export function rememberedMethods(): { google: boolean } {
+  return { google: readStorage(METHODS_KEY) === "google" };
+}
+
 /** Whether this deployment has a Google OAuth client configured. */
 export async function signInMethods(): Promise<{ google: boolean }> {
   try {
     const response = await fetch(`${API_BASE}/healthz`);
     if (!response.ok) return { google: false };
     const info = (await response.json()) as { auth?: { google?: boolean } };
-    return { google: info.auth?.google === true };
+    const google = info.auth?.google === true;
+    writeStorage(METHODS_KEY, google ? "google" : null);
+    return { google };
   } catch {
-    // Offline, or the API is down. The email form still renders and will
-    // report its own failure, which is a better first impression than an
-    // error page before anything has been tried.
-    return { google: false };
+    // Offline, or the API is down. Keep whatever the last visit found: the
+    // deployment has not changed just because this request failed, and the
+    // email form still renders and will report its own failure, which is a
+    // better first impression than an error page before anything was tried.
+    return rememberedMethods();
   }
 }
 

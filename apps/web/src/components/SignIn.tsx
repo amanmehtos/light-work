@@ -14,6 +14,7 @@ import {
   completeRedirectSignIn,
   hasRedirectSignIn,
   requestCode,
+  rememberedMethods,
   signInMethods,
   verifyCode,
   GOOGLE_START_URL,
@@ -27,7 +28,9 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: StoredSession) =>
   const [devCode, setDevCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [google, setGoogle] = useState(false);
+  // Seeded from the last visit so the button does not drop in after /healthz
+  // answers, pushing the form down under the pointer.
+  const [google, setGoogle] = useState(() => rememberedMethods().google);
   // Coming back from Google, the token is already in the fragment: show the
   // card as working rather than flashing an empty form that is about to vanish.
   const [returning, setReturning] = useState(hasRedirectSignIn);
