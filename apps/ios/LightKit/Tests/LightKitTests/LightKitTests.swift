@@ -6,11 +6,36 @@ import XCTest
 /// differently on iOS sorts differently on the server, and the conflict
 /// resolution quietly stops matching.
 final class ClockTests: XCTestCase {
-    func testEncodingMatchesTheTypeScriptFormat() {
-        let hlc = HLC(wall: 1_761_300_000_000, counter: 7, node: "device-a")
-        let encoded = hlc.encoded
-        XCTAssertEqual(encoded.split(separator: ":").count, 3)
-        XCTAssertEqual(HLC(encoded: encoded), hlc)
+    /// The expected strings were produced by running `encodeHLC` from
+    /// `packages/core/src/hlc.ts` on exactly these inputs, and pasted in.
+    ///
+    /// That provenance is the whole point. Asserting the shape — three parts,
+    /// round-trips cleanly — is what this test used to do, and it would pass
+    /// with the padding widths wrong, which is the one thing that actually
+    /// breaks: a clock that pads differently sorts differently as a string,
+    /// and conflict resolution quietly stops agreeing across platforms.
+    ///
+    /// The cases cover the base-36 carries, where an off-by-one in the width
+    /// would show: 1295 is "zz" and 1296 rolls over to "100".
+    func testEncodingMatchesVectorsFromTheTypeScript() {
+        let vectors: [(HLC, String)] = [
+            (HLC(wall: 0, counter: 0, node: "nabc0123456"), "00000000000:00000:nabc0123456"),
+            (HLC(wall: 1, counter: 1, node: "nzzzzzzzzzz"), "00000000001:00001:nzzzzzzzzzz"),
+            (HLC(wall: 35, counter: 35, node: "n0"), "0000000000z:0000z:n0"),
+            (HLC(wall: 36, counter: 36, node: "n1"), "00000000010:00010:n1"),
+            (HLC(wall: 1_761_609_600_000, counter: 0, node: "nq7x2k9mdp1"),
+             "000mh9sveo0:00000:nq7x2k9mdp1"),
+            (HLC(wall: 1_761_609_600_123, counter: 1295, node: "nq7x2k9mdp1"),
+             "000mh9sverf:000zz:nq7x2k9mdp1"),
+            (HLC(wall: 1_761_609_600_123, counter: 1296, node: "nq7x2k9mdp1"),
+             "000mh9sverf:00100:nq7x2k9mdp1"),
+            (HLC(wall: 9_007_199_254_740_991, counter: 60_466_175, node: "nmax"),
+             "2gosa7pa2gv:zzzzz:nmax"),
+        ]
+        for (clock, expected) in vectors {
+            XCTAssertEqual(clock.encoded, expected)
+            XCTAssertEqual(HLC(encoded: expected), clock, "did not survive a round trip")
+        }
     }
 
     func testEncodedClocksSortLikeComparedOnes() {

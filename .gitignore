@@ -10,3 +10,8 @@ build/
 .env
 worker-configuration.d.ts
 .wrangler/
+
+# SwiftPM and Xcode build output
+apps/ios/LightKit/.build/
+DerivedData/
+*.xcuserdatad
