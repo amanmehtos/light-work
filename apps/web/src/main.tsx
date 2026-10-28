@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 // that app rules win where they overlap.
 import "diurnal-ui/diurnal.css";
 import "diurnal-ui/diurnal.mjs";
+import "diurnal-ui/sky-header.mjs";
 
 import { App } from "./App.js";
 import "./styles.css";

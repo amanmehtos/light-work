@@ -9,6 +9,11 @@
 
 declare module "diurnal-ui/diurnal.css";
 
+/** Imported for its side effect: it mounts itself on every [data-dn-sky]. */
+declare module "diurnal-ui/sky-header.mjs" {
+  export function skyHeader(el: HTMLElement): void;
+}
+
 declare module "diurnal-ui/diurnal.mjs" {
   export type DiurnalMode = "light" | "dark";
   export type WeatherMode = "live" | "clear" | "partly" | "overcast" | "rain" | "fog";

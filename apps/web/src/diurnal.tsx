@@ -9,8 +9,9 @@
  * the current light.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ICONS, diurnal, type DiurnalInfo } from "diurnal-ui/diurnal.mjs";
+import { skyHeader } from "diurnal-ui/sky-header.mjs";
 
 export { diurnal };
 export type { DiurnalInfo };
@@ -75,4 +76,40 @@ export function ThemeToggle({ title }: { title?: string }) {
       dangerouslySetInnerHTML={{ __html: ICONS[isDark ? "moon" : "sun"] }}
     />
   );
+}
+
+/**
+ * The weather overhead, as a band.
+ *
+ * The library mounts itself on every `[data-dn-sky]` when it is imported,
+ * which is right for a static page and no use here: React renders this long
+ * after that has run. So the band is mounted by hand. `skyHeader` ignores an
+ * element it already holds, so neither path can double it up.
+ */
+export function Sky({ className = "" }: { className?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (ref.current !== null) skyHeader(ref.current);
+  }, []);
+  return <div ref={ref} className={`dn-sky ${className}`} aria-hidden="true" />;
+}
+
+/**
+ * Whether the page has scrolled at all.
+ *
+ * Diurnal does this itself for `[data-dn-scroll-edge]` headers, but it collects
+ * them when the module is imported — before React has rendered anything — so in
+ * this app the class was never once applied. Nobody noticed while the masthead
+ * was an opaque card; the moment it became type on the sky, content started
+ * showing straight through it. Same threshold the library uses.
+ */
+export function useScrolled(): boolean {
+  const [scrolled, setScrolled] = useState(() => window.scrollY > 4);
+  useEffect(() => {
+    const onScroll = (): void => setScrolled(window.scrollY > 4);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  return scrolled;
 }

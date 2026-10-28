@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { compareOrder, type Task } from "@light/core";
 import { loadSession, logout, readConsentRequest, type StoredSession } from "./auth.js";
-import { ThemeToggle, describeLight, useDiurnal } from "./diurnal.js";
+import { Sky, ThemeToggle, describeLight, useDiurnal, useScrolled } from "./diurnal.js";
 import { useLightWeek } from "./store-hook.js";
 import { AddTask, type ParsedEntry } from "./components/AddTask.js";
 import { Consent } from "./components/Consent.js";
@@ -199,10 +199,14 @@ function Workspace({
             : "All tasks";
 
   const light = useDiurnal();
+  const scrolled = useScrolled();
 
   return (
     <div className="app">
-      <header className="dn-card dn-card--flat topbar" data-dn-scroll-edge>
+      {/* The weather overhead, behind the masthead. It is already shaping every
+          shadow on this page; this is the same sky, drawn. */}
+      <Sky className="topsky" />
+      <header className={`dn-card dn-card--flat topbar${scrolled ? " is-scrolled" : ""}`}>
         {/* The library's own control: it flips sun and moon, and redraws
             itself to match. */}
         <ThemeToggle title={describeLight(light)} />

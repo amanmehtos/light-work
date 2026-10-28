@@ -169,3 +169,18 @@ html, body, #root { height: 100%; }
 .consent-destination code { font-family: var(--dn-mono); font-size: 0.8125rem; }
 
 .consent-actions { display: grid; gap: 0.5rem; margin-top: 1.25rem; }
+
+/* The sky band sits over the page rather than in it, so content passes under
+   its fading lower edge the way it passes under the masthead. Above the
+   content, below the masthead, and never in the way of a click. */
+/* Tall enough to still be behind the masthead when it wraps to two rows at
+   narrow widths, which is where a band sized to one row shows a tonal step. */
+.topsky { position: fixed; inset: 0 0 auto; height: 152px; z-index: 1; }
+
+/* At rest the masthead is only type on the sky — no surface, no rule. Once
+   content has scrolled under it that stops being readable, so the surface
+   comes back; `.is-scrolled` is set by diurnal.mjs for exactly this. */
+.topbar { background: transparent; border-bottom-color: transparent; z-index: 2;
+  transition: background var(--dn-ease), border-bottom-color var(--dn-ease); }
+.topbar.is-scrolled { background: var(--dn-surface); border-bottom-color: var(--dn-line); }
+.body { padding-top: 1.75rem; }
