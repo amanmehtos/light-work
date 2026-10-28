@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AA0000000000000000000053 /* LightKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000051 /* LightKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		AA0000000000000000000001 /* LightWeek.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LightWeek.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000002 /* LightWeek-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "LightWeek-Info.plist"; sourceTree = "<group>"; };
@@ -50,6 +54,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA0000000000000000000053 /* LightKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
