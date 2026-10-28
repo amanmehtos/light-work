@@ -34,6 +34,17 @@ public struct PushRequest: Codable, Sendable {
     public var version: Int
     public var since: Int
     public var ops: [Op]
+
+    /// Spelled out because a `public struct`'s memberwise initialiser is
+    /// internal: without this, the push body decodes outside the package but
+    /// cannot be built there, and an app has to re-declare the three fields to
+    /// make a request — which is how the one type that defines the wire format
+    /// ends up with a second definition in every client.
+    public init(version: Int = lightWeekProtocolVersion, since: Int, ops: [Op]) {
+        self.version = version
+        self.since = since
+        self.ops = ops
+    }
 }
 
 public struct SyncResponse: Codable, Sendable {

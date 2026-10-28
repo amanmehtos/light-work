@@ -88,17 +88,21 @@ public actor LightWeekClient {
         return snapshot
     }
 
+    /// Whose account this is.
+    ///
+    /// Asked once after connecting, so a screen can name the account without a
+    /// round trip every time it opens — including offline, if the caller keeps
+    /// the answer. Needs `tasks:read`, like the rest of the reading here.
+    public func accountEmail() async throws -> String? {
+        struct Me: Decodable { let email: String? }
+        let data = try await send("GET", "/account/me")
+        return try JSONDecoder().decode(Me.self, from: data).email
+    }
+
     /// Open tasks, for a picker. Ordered by priority then title, which is the
     /// order someone choosing what to focus on wants.
     public func openTasks() async throws -> [Task] {
-        let snapshot = try await snapshot()
-        return (snapshot.entities.task ?? [])
-            .filter { !$0.isCompleted }
-            .sorted {
-                $0.priority.rawValue != $1.priority.rawValue
-                    ? $0.priority.rawValue < $1.priority.rawValue
-                    : $0.content.localizedCaseInsensitiveCompare($1.content) == .orderedAscending
-            }
+        try await snapshot().openTasks
     }
 
     // MARK: - Writing
@@ -199,5 +203,23 @@ public actor LightWeekClient {
                 body: String(data: data, encoding: .utf8) ?? "")
         }
         return data
+    }
+}
+
+extension LightWeekClient.Snapshot {
+    /// The same list `openTasks()` returns, from a snapshot already in hand.
+    ///
+    /// Light Week's task list needs the projects and the focus sessions out of
+    /// the same snapshot, so fetching the whole account a second time just to
+    /// have the ordering applied would be a wasted round trip — and a second
+    /// copy of the ordering rule, which is worse.
+    public var openTasks: [Task] {
+        (entities.task ?? [])
+            .filter { !$0.isCompleted }
+            .sorted {
+                $0.priority.rawValue != $1.priority.rawValue
+                    ? $0.priority.rawValue < $1.priority.rawValue
+                    : $0.content.localizedCaseInsensitiveCompare($1.content) == .orderedAscending
+            }
     }
 }

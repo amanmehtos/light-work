@@ -133,3 +133,45 @@ interesting part. `interruptions` counts pauses and times the app was left.
 
 An abandoned session should still be written. A timer that only records its
 successes produces statistics that flatter you.
+
+## Starting one from a task
+
+Light Week hands a task to Light Minute over a custom-scheme link, and this is
+the other half of the arc: the focus session that comes back through `/sync`
+above is the one that started here.
+
+```
+com.lightminute.app:/focus?taskId=…&title=…&projectName=…&projectId=…&planned=1500
+```
+
+| Parameter | |
+| --- | --- |
+| `taskId` | **Required.** The only one the server ever sees — it is what the session is filed against. |
+| `title` | What the timer puts on screen. A link without one still binds. |
+| `projectName` | Shown beside the title. |
+| `projectId` | Stored on the session when present. |
+| `planned` | Seconds. Floored at 60. |
+
+Percent-encode every value as RFC 3986 unreserved-only: a task called
+`C++ & co` otherwise either changes the shape of the query it sits in or
+arrives with its `+` read as a space, depending on which convention the reader
+follows.
+
+`planned` is **advice for one session**, not a change to anyone's focus length
+— Light Week sends the task's own `duration` when it has one in minutes, and
+`1500` when it does not. A `day` duration is an estimate of elapsed time rather
+than of focus, so it is no guide at all and the default is used instead.
+
+The single-slash form is RFC 8252's, as with the redirect URIs above. Unlike
+those, Light Minute reads the two-slash spelling as well — but the OAuth
+redirect is byte-compared, so the two are not interchangeable and there is no
+reason to send the spelling that only works by the reader's forgiveness.
+
+Before opening, check `canOpenURL` and say plainly that Light Minute is not
+installed if it answers no. Both apps declare the other's scheme in
+`LSApplicationQueriesSchemes`; without that, the check answers no however
+installed the other app is.
+
+This link was written down only in Light Minute's own repository for a while,
+which is how a contract between two apps quietly becomes a contract between two
+memories.
