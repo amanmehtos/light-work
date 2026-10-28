@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "group:apps/ios/LightWeek.xcodeproj">
+   </FileRef>
+   <FileRef
+      location = "group:../Light Minute/LightMinute/LightMinute.xcodeproj">
+   </FileRef>
+   <FileRef
+      location = "group:apps/ios/LightKit">
+   </FileRef>
+   <FileRef
+      location = "group:vendor/diurnal-ui/swift/DiurnalUI">
+   </FileRef>
+</Workspace>
