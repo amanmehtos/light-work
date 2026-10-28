@@ -1,4 +1,5 @@
 import SwiftUI
+import DiurnalUI
 import LightKit
 
 /// The open tasks, each with a way into Light Minute.
@@ -21,10 +22,19 @@ struct TaskListView: View {
             content
                 .navigationTitle("This week")
                 .toolbar { toolbar }
+                // Behind the title rather than above the list: the sky is
+                // ambient, and a band that pushed the week down the screen
+                // would be charging real estate for weather.
+                .background(alignment: .top) {
+                    SkyHeader(height: .standard)
+                        .ignoresSafeArea(edges: .top)
+                        .allowsHitTesting(false)
+                }
+                .toolbarBackground(.hidden, for: .navigationBar)
         }
         // No tint anywhere in this app: a monochrome system has no accent, and
         // SwiftUI's default blue is exactly the hue the design excludes.
-        .tint(.primary)
+        .tint(Color.dnInk)
         .task { await model.load() }
         .alert("Can’t start a focus block", isPresented: Binding(
             get: { handoffError != nil },
@@ -46,7 +56,7 @@ struct TaskListView: View {
         } else {
             List(model.rows) { row in
                 TaskRowView(row: row, onFocus: { focus(row) })
-                    .listRowSeparatorTint(Color(uiColor: .separator))
+                    .listRowSeparatorTint(Color.dnLine)
             }
             .listStyle(.plain)
             .refreshable { await model.load() }
@@ -55,10 +65,10 @@ struct TaskListView: View {
 
     private func message(title: String, detail: String) -> some View {
         VStack(spacing: 8) {
-            Text(title).font(.headline)
+            Text(title).font(DiurnalType.body(.headline, weight: .semibold)).foregroundStyle(Color.dnInk)
             Text(detail)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(DiurnalType.body(.callout))
+                .foregroundStyle(Color.dnInk2)
                 .multilineTextAlignment(.center)
             Button("Try again") {
                 // `LightKit.Task` shadows `_Concurrency.Task` in any file that
@@ -66,7 +76,7 @@ struct TaskListView: View {
                 // full here and anywhere else this app starts work from a view.
                 _Concurrency.Task { await model.load() }
             }
-            .font(.footnote)
+            .font(DiurnalType.mono(.footnote))
             .padding(.top, 4)
         }
         .padding(32)
@@ -86,7 +96,7 @@ struct TaskListView: View {
                 }
             } label: {
                 Image(systemName: "person.crop.circle")
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Color.dnInk)
             }
         }
     }
@@ -123,7 +133,7 @@ struct TaskRowView: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(row.task.content)
-                    .font(.body)
+                    .font(DiurnalType.body())
 
                 BadgeFlow(spacing: 6) { badges }
             }
@@ -132,11 +142,11 @@ struct TaskRowView: View {
 
             Button(action: onFocus) {
                 Text("Focus")
-                    .font(.footnote.weight(.medium))
+                    .font(DiurnalType.body(.footnote, weight: .medium))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
-                    .foregroundStyle(Color(uiColor: .systemBackground))
-                    .background(Color.primary, in: Capsule())
+                    .foregroundStyle(Color.dnBackground)
+                    .background(Color.dnInk, in: Capsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Focus on \(row.task.content) in Light Minute")

@@ -1,4 +1,5 @@
 import SwiftUI
+import DiurnalUI
 
 /// What there is to see before the app has a grant.
 ///
@@ -10,13 +11,11 @@ struct SignInView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("LIGHT WEEK")
-                .font(.caption.weight(.semibold))
-                .tracking(1.6)
-                .foregroundStyle(.secondary)
+            Text("Light Week").dnEyebrow()
 
             Text("Your week, and where the attention went")
-                .font(.title2.weight(.semibold))
+                .font(DiurnalType.body(.title2))
+                .foregroundStyle(Color.dnInk)
 
             Text("""
                 Signing in opens Light Week in a browser sheet so the account \
@@ -24,8 +23,8 @@ struct SignInView: View {
                 and change your tasks — nothing else, and you can withdraw it \
                 from your account at any time.
                 """)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(DiurnalType.body(.callout))
+                .foregroundStyle(Color.dnInk2)
 
             Button {
                 _Concurrency.Task { await auth.signIn() }
@@ -33,26 +32,32 @@ struct SignInView: View {
                 HStack {
                     Spacer()
                     if auth.state == .signingIn {
-                        ProgressView().controlSize(.small).tint(Color(uiColor: .systemBackground))
+                        ProgressView().controlSize(.small).tint(Color.dnBackground)
                     } else {
-                        Text("Sign in to Light Week").font(.body.weight(.medium))
+                        Text("Sign in to Light Week").font(DiurnalType.body(.body, weight: .medium))
                     }
                     Spacer()
                 }
                 .padding(.vertical, 13)
-                .foregroundStyle(Color(uiColor: .systemBackground))
-                .background(Color.primary, in: RoundedRectangle(cornerRadius: 11))
+                .foregroundStyle(Color.dnBackground)
+                .background(Color.dnInk, in: RoundedRectangle(cornerRadius: DiurnalTokens.radius))
             }
             .buttonStyle(.plain)
             .disabled(auth.state == .signingIn)
 
             if let error = auth.lastError {
                 Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(DiurnalType.body(.footnote))
+                    .foregroundStyle(Color.dnDanger)
             }
         }
         .padding(26)
-        .frame(maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(Color.dnBackground)
+        .overlay(alignment: .top) {
+            // The weather outside, before there is anything of yours to show.
+            SkyHeader(height: .tall).allowsHitTesting(false)
+        }
+        .ignoresSafeArea(edges: .top)
     }
 }

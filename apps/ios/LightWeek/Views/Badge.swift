@@ -1,4 +1,5 @@
 import SwiftUI
+import DiurnalUI
 
 /// A small piece of metadata on a task row.
 ///
@@ -19,7 +20,7 @@ struct Badge: View {
 
     var body: some View {
         Text(text)
-            .font(.caption)
+            .font(DiurnalType.mono(.caption))
             .monospacedDigit()
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -33,23 +34,23 @@ struct Badge: View {
         switch weight {
         // Paper on ink: the one inversion in the system, and what makes an
         // urgent task the loudest thing in a grey list.
-        case .solid: return AnyShapeStyle(Color(uiColor: .systemBackground))
-        case .outline: return AnyShapeStyle(Color.primary)
-        case .plain: return AnyShapeStyle(Color.secondary)
+        case .solid: return AnyShapeStyle(Color.dnBackground)
+        case .outline: return AnyShapeStyle(Color.dnInk)
+        case .plain: return AnyShapeStyle(Color.dnMuted)
         }
     }
 
     private var background: some View {
         Capsule().fill(
             weight == .solid
-                ? AnyShapeStyle(Color.primary)
-                : AnyShapeStyle(Color(uiColor: .secondarySystemFill).opacity(weight == .outline ? 0 : 1)))
+                ? AnyShapeStyle(Color.dnInk)
+                : AnyShapeStyle(Color.dnSunken.opacity(weight == .outline ? 0 : 1)))
     }
 
     @ViewBuilder
     private var border: some View {
         if weight == .outline {
-            Capsule().strokeBorder(Color.primary.opacity(0.35), lineWidth: 1)
+            Capsule().strokeBorder(Color.dnLineStrong, lineWidth: 1)
         }
     }
 }
