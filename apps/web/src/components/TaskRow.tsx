@@ -28,6 +28,46 @@ function humanDuration(seconds: number): string {
   return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }
 
+/**
+ * What to suggest the timer be set to, in seconds.
+ *
+ * A task estimated in days is a body of work rather than a sitting, so it gets
+ * the default instead: proposing an eight-hour block would be worse than
+ * proposing nothing. Only advice for this one session — Light Minute floors it
+ * at a minute and never writes it back to the user's own focus length.
+ */
+const DEFAULT_PLANNED_SECONDS = 1500;
+
+function plannedSeconds(task: Task): number {
+  return task.duration !== null && task.duration.unit === "minute"
+    ? task.duration.amount * 60
+    : DEFAULT_PLANNED_SECONDS;
+}
+
+/**
+ * The link that starts a Light Minute session already counting against a task.
+ *
+ * Exported for its own test. `taskId` is all the recording needs; the title and
+ * project ride along so the timer can say on screen what it is counting,
+ * without a round trip or even a signed-in app at the other end.
+ *
+ * Built by hand rather than with URLSearchParams, which spells a space "+".
+ * The other end reads the query with URLComponents, and that leaves a "+"
+ * standing — a task would arrive titled "Ready+the+deck".
+ */
+export function focusLink(task: Task, projectName: string | null): string {
+  const fields: [string, string][] = [
+    ["taskId", task.id],
+    ["title", task.content],
+  ];
+  if (projectName !== null) fields.push(["projectName", projectName]);
+  fields.push(["projectId", task.projectId]);
+  fields.push(["planned", String(plannedSeconds(task))]);
+
+  const query = fields.map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join("&");
+  return `com.lightminute.app:/focus?${query}`;
+}
+
 function formatDay(iso: string, today: string): string {
   const day = iso.slice(0, 10);
   if (day === today) return "today";
@@ -69,6 +109,9 @@ export function TaskRow({
 
   const focus = ops.focusStatsForTask(task.id);
   const overdue = task.due !== null && task.due.date.slice(0, 10) < today;
+  // Carried in the focus link so Light Minute can say which project it is
+  // counting against, without asking the server.
+  const project = store.get("project", task.projectId);
 
   return (
     <li>
@@ -133,6 +176,20 @@ export function TaskRow({
         </button>
 
         <span className="dn-row__aside">
+          {/* Rendered on every platform, deliberately. On an iPhone this hands
+              the task to Light Minute; in a desktop browser the scheme resolves
+              to nothing and the click does nothing, which is honest and costs
+              nothing. Reading the user agent to hide it would be guesswork that
+              breaks on the next device. */}
+          {!task.isCompleted && (
+            <a
+              className="dn-btn dn-btn--ghost dn-btn--sm"
+              aria-label={`Focus on ${task.content}`}
+              href={focusLink(task, project === null ? null : project.name)}
+            >
+              Focus
+            </a>
+          )}
           <button
             type="button"
             className="dn-btn dn-btn--ghost dn-btn--sm"
