@@ -65,7 +65,31 @@ public struct Project: Codable, Sendable, Identifiable, Equatable {
     public var isFavorite: Bool
     public var isArchived: Bool
     public var isInbox: Bool
+    /// The trophy cabinet, holding the rewards that completed tasks have
+    /// earned. Permanent in the same way the inbox is.
+    public var isRewards: Bool
     public var description: String
+
+    /// Spelled out for one field.
+    ///
+    /// `isRewards` was added after there were already accounts, so every
+    /// project stored before it has no such key. The synthesised decoder
+    /// throws on a missing non-optional, which would mean the whole snapshot
+    /// failing to decode — so this one field is read as "false when absent",
+    /// which is what an older project genuinely is.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        parentId = try values.decodeIfPresent(String.self, forKey: .parentId)
+        name = try values.decode(String.self, forKey: .name)
+        color = try values.decode(String.self, forKey: .color)
+        order = try values.decode(String.self, forKey: .order)
+        isFavorite = try values.decode(Bool.self, forKey: .isFavorite)
+        isArchived = try values.decode(Bool.self, forKey: .isArchived)
+        isInbox = try values.decode(Bool.self, forKey: .isInbox)
+        isRewards = try values.decodeIfPresent(Bool.self, forKey: .isRewards) ?? false
+        description = try values.decode(String.self, forKey: .description)
+    }
 }
 
 public struct Task: Codable, Sendable, Identifiable, Equatable {
@@ -81,9 +105,33 @@ public struct Task: Codable, Sendable, Identifiable, Equatable {
     public var deadline: Deadline?
     public var duration: Duration?
     public var labelIds: [String]
+    /// What finishing this earns, in the user's own words.
+    ///
+    /// Nil and empty are different: nil means no reward was ever set, empty
+    /// means one was set and then cleared. Optional, so a task stored before
+    /// rewards existed decodes without help.
+    public var reward: String?
     public var isCompleted: Bool
     public var completedAt: String?
     public var createdAt: String
+}
+
+/// The account's settings. One record, at a well-known id.
+///
+/// Synced rather than kept on the device, because the switch it holds governs
+/// whether a synced project is part of the account — a phone with it off and a
+/// laptop with it on would disagree about what the account contains.
+public struct Preference: Codable, Sendable, Identifiable, Equatable {
+    public static let wellKnownId = "preferences"
+
+    public var id: String
+    /// Whether tasks carry rewards, and the Rewards project is shown.
+    public var rewardsEnabled: Bool
+
+    public init(id: String = Preference.wellKnownId, rewardsEnabled: Bool = true) {
+        self.id = id
+        self.rewardsEnabled = rewardsEnabled
+    }
 }
 
 public struct Label: Codable, Sendable, Identifiable, Equatable {

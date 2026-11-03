@@ -75,6 +75,15 @@ export interface Project {
   isArchived: boolean;
   /** Exactly one project per account is the inbox; it cannot be deleted. */
   isInbox: boolean;
+  /**
+   * The trophy cabinet: one per account, created the first time a reward is
+   * earned, and undeletable for the same reason the inbox is — things are
+   * filed into it automatically, and somewhere to put them has to exist.
+   *
+   * Hidden rather than removed when rewards are switched off. Deleting it
+   * would throw away everything already earned on a flick of a setting.
+   */
+  isRewards: boolean;
   isCollapsed: boolean;
   description: string;
 }
@@ -108,6 +117,15 @@ export interface Task {
   deadline: Deadline | null;
   duration: Duration | null;
   labelIds: string[];
+  /**
+   * What finishing this earns, in the user's own words.
+   *
+   * Null is not the same as empty: null means no reward was ever set, empty
+   * means one was set and then cleared. Nothing depends on the difference
+   * today, but a reward is a promise and it is worth being able to tell a
+   * promise that was withdrawn from one that was never made.
+   */
+  reward: string | null;
   isCompleted: boolean;
   completedAt: string | null;
   isCollapsed: boolean;
@@ -180,6 +198,26 @@ export interface FocusSession {
   note: string | null;
 }
 
+/**
+ * Account-wide settings, as a single record.
+ *
+ * An entity rather than something kept on the device, because these decide
+ * what exists rather than how it looks: a Rewards project that was present on
+ * the phone and absent on the web would be two different accounts. Being an
+ * entity also means it syncs and merges like everything else, with no new
+ * machinery — the stores are generic over kind.
+ *
+ * One row, at {@link PREFERENCES_ID}.
+ */
+export interface Preference {
+  id: string;
+  /** Whether tasks carry rewards, and the Rewards project is shown. */
+  rewardsEnabled: boolean;
+}
+
+/** The single preferences record. */
+export const PREFERENCES_ID = "preferences";
+
 export const ENTITY_KINDS = [
   "project",
   "section",
@@ -189,6 +227,7 @@ export const ENTITY_KINDS = [
   "reminder",
   "filter",
   "focusSession",
+  "preference",
 ] as const;
 
 export type EntityKind = (typeof ENTITY_KINDS)[number];
@@ -202,6 +241,7 @@ export interface EntityByKind {
   reminder: Reminder;
   filter: Filter;
   focusSession: FocusSession;
+  preference: Preference;
 }
 
 export type Entity = EntityByKind[EntityKind];

@@ -1,21 +1,21 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { compareOrder, type Task } from "@light/core";
 import { loadSession, logout, readConsentRequest, type StoredSession } from "./auth.js";
 import { Sky, ThemeToggle, describeLight, useDiurnal, useScrolled } from "./diurnal.js";
 import { useLightWeek } from "./store-hook.js";
 import { AddTask, type ParsedEntry } from "./components/AddTask.js";
 import { Consent } from "./components/Consent.js";
+import { Day } from "./components/Day.js";
+import { Preferences } from "./components/Preferences.js";
 import { SignIn } from "./components/SignIn.js";
 import { Sidebar, type View } from "./components/Sidebar.js";
+import { TaskEditor } from "./components/TaskEditor.js";
 import { TaskRow } from "./components/TaskRow.js";
+import { dueDay, localDay } from "./schedule.js";
 
 function todayISO(): string {
   // Local calendar day, which is what "Today" has to mean to a user.
-  return new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
+  return localDay(new Date());
 }
 
 export function App() {
@@ -71,15 +71,34 @@ function Workspace({
   const { store, ops, status, revision, commit, ready, error } = useLightWeek(session.token);
   const [view, setView] = useState<View>({ kind: "today" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
   const today = todayISO();
+
+  // Read through `ops` rather than the store so the default — on — lives in
+  // one place, next to the rule that acts on it.
+  const rewardsEnabled = ops.rewardsEnabled();
 
   // `revision` is the dependency that matters: the store lives outside React,
   // so this recomputes when it changes rather than when props do.
   const { visible, counts, inboxProjectId } = useMemo(() => {
-    const all = store.all("task");
+    // With rewards off the project and its contents go quiet together —
+    // leaving the trophies loose in Today would be the opposite of hiding it.
+    const hidden = new Set(
+      rewardsEnabled
+        ? []
+        : store
+            .all("project")
+            .filter((project) => project.isRewards)
+            .map((project) => project.id),
+    );
+
+    const all = store.all("task").filter((task) => !hidden.has(task.projectId));
     const open = all.filter((task) => !task.isCompleted);
     const completed = all.filter((task) => task.isCompleted);
-    const dueBy = (task: Task) => task.due?.date.slice(0, 10) ?? null;
+    // Through `dueDay`, not off the front of the string: a timed task stores
+    // a UTC instant, and slicing it puts a 23:00 task on the wrong day.
+    const dueBy = (task: Task) => dueDay(task.due);
 
     const todayTasks = open.filter((task) => {
       const day = dueBy(task);
@@ -111,9 +130,14 @@ function Workspace({
       case "project":
         list = open.filter((task) => task.projectId === view.projectId && task.parentId === null);
         break;
+      case "day":
+        // The day view reads the store itself, because what it needs — timed
+        // against untimed — is not a filter of one list.
+        list = [];
+        break;
     }
 
-    if (view.kind !== "upcoming" && view.kind !== "completed") {
+    if (view.kind !== "upcoming" && view.kind !== "completed" && view.kind !== "day") {
       list = [...list].sort((a, b) => compareOrder(a.order, b.order));
     }
 
@@ -131,7 +155,7 @@ function Workspace({
       inboxProjectId: inbox?.id ?? firstProject?.id ?? null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store, view, today, revision]);
+  }, [store, view, today, revision, rewardsEnabled]);
 
   const targetProjectId = view.kind === "project" ? view.projectId : inboxProjectId;
 
@@ -187,16 +211,25 @@ function Workspace({
   }
 
   const project = view.kind === "project" ? store.get("project", view.projectId) : null;
+
+  // Switching rewards off while looking at the trophies would otherwise leave
+  // you on a heading with nothing under it — the project is hidden, but the
+  // view still points at it.
+  useEffect(() => {
+    if (!rewardsEnabled && project !== null && project.isRewards) setView({ kind: "today" });
+  }, [rewardsEnabled, project]);
   const heading =
     view.kind === "project"
       ? (project?.name ?? "Project")
       : view.kind === "today"
         ? "Today"
-        : view.kind === "upcoming"
-          ? "Upcoming"
-          : view.kind === "completed"
-            ? "Completed"
-            : "All tasks";
+        : view.kind === "day"
+          ? "Your day"
+          : view.kind === "upcoming"
+            ? "Upcoming"
+            : view.kind === "completed"
+              ? "Completed"
+              : "All tasks";
 
   const light = useDiurnal();
   const scrolled = useScrolled();
@@ -222,6 +255,13 @@ function Workspace({
         <button
           type="button"
           className="dn-btn dn-btn--ghost dn-btn--sm"
+          onClick={() => setPreferencesOpen(true)}
+        >
+          Preferences
+        </button>
+        <button
+          type="button"
+          className="dn-btn dn-btn--ghost dn-btn--sm"
           onClick={() => {
             void logout(session.token).then(onSignOut);
           }}
@@ -238,7 +278,14 @@ function Workspace({
 
       <div className="body">
         <div className="dn-card dn-card--flat sidebar-panel">
-          <Sidebar store={store} view={view} onSelect={setView} counts={counts} />
+          <Sidebar
+            store={store}
+            view={view}
+            onSelect={setView}
+            counts={counts}
+            today={today}
+            rewardsEnabled={rewardsEnabled}
+          />
         </div>
 
         <main className="main-column">
@@ -247,10 +294,22 @@ function Workspace({
             <p className="dn-prose project-description">{project.description}</p>
           )}
 
-          <AddTask onAdd={addTask} disabled={!ready} />
+          {view.kind !== "day" && <AddTask onAdd={addTask} disabled={!ready} />}
 
           {!ready ? (
             <p className="dn-hint pad">Loading your tasks…</p>
+          ) : view.kind === "day" ? (
+            <Day
+              day={view.day}
+              store={store}
+              ops={ops}
+              commit={commit}
+              revision={revision}
+              today={today}
+              onDayChange={(day) => setView({ kind: "day", day })}
+              onOpen={(task) => setEditingId(task.id)}
+              onComplete={complete}
+            />
           ) : visible.length === 0 ? (
             <p className="dn-hint pad">
               {view.kind === "today"
@@ -273,6 +332,7 @@ function Workspace({
                   selected={selectedId === task.id}
                   onComplete={() => complete(task)}
                   onSelect={() => setSelectedId(selectedId === task.id ? null : task.id)}
+                  onEdit={() => setEditingId(task.id)}
                   onMoveUp={() => move(task, -1)}
                   onMoveDown={() => move(task, 1)}
                 />
@@ -281,6 +341,24 @@ function Workspace({
           )}
         </main>
       </div>
+
+      {/* Both sheets stay mounted: the library animates an element it already
+          holds, so unmounting one would cost it its closing animation. */}
+      <TaskEditor
+        task={editingId === null ? null : store.get("task", editingId)}
+        store={store}
+        ops={ops}
+        commit={commit}
+        rewardsEnabled={rewardsEnabled}
+        onClose={() => setEditingId(null)}
+      />
+      <Preferences
+        open={preferencesOpen}
+        ops={ops}
+        commit={commit}
+        rewardsEnabled={rewardsEnabled}
+        onClose={() => setPreferencesOpen(false)}
+      />
     </div>
   );
 }

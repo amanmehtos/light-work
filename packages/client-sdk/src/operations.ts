@@ -19,6 +19,7 @@ import {
   type Task,
   compareOrder,
   newId,
+  PREFERENCES_ID,
 } from "@light/core";
 import { nextOccurrence, parseRecurrence } from "./recurrence.js";
 import type { LightStore } from "./store.js";
@@ -82,6 +83,7 @@ export class Operations {
       isFavorite: input.isFavorite ?? false,
       isArchived: false,
       isInbox: false,
+      isRewards: false,
       isCollapsed: false,
       description: input.description ?? "",
     };
@@ -140,6 +142,7 @@ export class Operations {
     deadline?: { date: string } | null;
     duration?: Task["duration"];
     labelNames?: string[];
+    reward?: string | null;
   }): Staged<Task> {
     const ops: Op[] = [];
     const labelIds: string[] = [];
@@ -166,6 +169,7 @@ export class Operations {
       due: input.due ?? null,
       deadline: input.deadline ?? null,
       duration: input.duration ?? null,
+      reward: input.reward ?? null,
       labelIds,
       isCompleted: false,
       completedAt: null,
@@ -183,7 +187,14 @@ export class Operations {
     changes: Partial<
       Pick<
         Task,
-        "content" | "description" | "priority" | "due" | "deadline" | "duration" | "labelIds"
+        | "content"
+        | "description"
+        | "priority"
+        | "due"
+        | "deadline"
+        | "duration"
+        | "labelIds"
+        | "reward"
       >
     >,
   ): Staged<Task | null> {
@@ -217,9 +228,12 @@ export class Operations {
         const op = this.store.mutate("task", id, {
           due: { ...task.due, date: next },
         });
+        // A repeating task earns its reward every time it is done. The reward
+        // is for doing the thing, not for being finished with it.
+        const earned = this.earnReward(task);
         return {
           result: { task: this.store.get("task", id), rescheduled: true, recurrenceUnderstood: true },
-          ops: [op],
+          ops: [op, ...earned],
         };
       }
       // Unparsable recurrence: complete it, and let the caller report that the
@@ -230,7 +244,7 @@ export class Operations {
       });
       return {
         result: { task: this.store.get("task", id), rescheduled: false, recurrenceUnderstood: false },
-        ops: [op],
+        ops: [op, ...this.earnReward(task)],
       };
     }
 
@@ -240,8 +254,56 @@ export class Operations {
     });
     return {
       result: { task: this.store.get("task", id), rescheduled: false, recurrenceUnderstood: true },
-      ops: [op],
+      ops: [op, ...this.earnReward(task)],
     };
+  }
+
+  /* ---------------------------------------------------------- */
+  /* rewards                                                    */
+  /* ---------------------------------------------------------- */
+
+  /** Whether tasks carry rewards. On unless it has been turned off. */
+  rewardsEnabled(): boolean {
+    const preference = this.store.get("preference", PREFERENCES_ID);
+    return preference?.rewardsEnabled ?? true;
+  }
+
+  setRewardsEnabled(enabled: boolean): Staged<boolean> {
+    const op = this.store.mutate("preference", PREFERENCES_ID, { rewardsEnabled: enabled });
+    return { result: enabled, ops: [op] };
+  }
+
+  /** The trophy cabinet, made the first time something is put in it. */
+  rewardsProject(): Staged<Project> {
+    const existing = this.store.all("project").find((project) => project.isRewards);
+    if (existing !== undefined) return { result: existing, ops: [] };
+
+    const staged = this.createProject({ name: "Rewards" });
+    const op = this.store.mutate("project", staged.result.id, { isRewards: true });
+    return {
+      result: this.store.get("project", staged.result.id) ?? staged.result,
+      ops: [...staged.ops, op],
+    };
+  }
+
+  /**
+   * Files a task's reward, if it has one and rewards are on.
+   *
+   * Lives here rather than in the views because the MCP tools complete tasks
+   * through this same method: a rule that only fired in the browser would be
+   * wrong every time an agent finished something.
+   */
+  private earnReward(task: Task): Op[] {
+    const reward = task.reward?.trim() ?? "";
+    if (reward === "" || !this.rewardsEnabled()) return [];
+
+    const project = this.rewardsProject();
+    const earned = this.createTask({
+      projectId: project.result.id,
+      content: reward,
+      description: `Earned by finishing “${task.content}”.`,
+    });
+    return [...project.ops, ...earned.ops];
   }
 
   uncompleteTask(id: string): Staged<Task | null> {
@@ -297,6 +359,11 @@ export class Operations {
       // assumes an inbox exists, so no caller should be able to remove it.
       if (project !== null && project.isInbox) {
         throw new Error("the inbox cannot be deleted");
+      }
+      // Same reasoning, different cabinet: the trophies are a record of work
+      // already done, and nothing else can recreate them.
+      if (project !== null && project.isRewards) {
+        throw new Error("the rewards project cannot be deleted");
       }
 
       if (options.recursive === true) {

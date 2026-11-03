@@ -61,6 +61,9 @@ export function formatTask(context: ToolContext, task: Task) {
     // the same question as when it is owed.
     deadline: task.deadline?.date,
     duration: task.duration ?? undefined,
+    // Only when it has one: a `reward: null` on every task would read as a
+    // field the agent is being asked to fill in.
+    reward: task.reward ?? undefined,
     labels,
     completed: task.isCompleted,
     focus: focus.sessions === 0 ? undefined : {

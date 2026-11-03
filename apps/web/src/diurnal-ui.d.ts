@@ -77,3 +77,48 @@ declare module "diurnal-ui/dialog.mjs" {
   export function ask(options: Record<string, unknown>): Promise<unknown>;
   export function confirmAction(options: Record<string, unknown>): Promise<boolean>;
 }
+
+declare module "diurnal-ui/fluid.mjs" {
+  /** What `sheet()` hands back: a sheet that can be opened and closed. */
+  export interface SheetApi {
+    /** `from` is the control that opened it, which gets focus back on close. */
+    open(from?: Element | null): void;
+    close(): void;
+    readonly isOpen: boolean;
+  }
+
+  /**
+   * Mounts the spring and the drag-to-dismiss on a `.dn-sheet`, and returns
+   * the same api on every later call for that element.
+   */
+  export function sheet(el: HTMLElement): SheetApi;
+  export function enhanceSwitch(label: HTMLElement): void;
+  export function enhanceSeg(seg: HTMLElement): void;
+}
+
+declare module "diurnal-ui/motion.mjs" {
+  /**
+   * Pointer dragging with 1:1 movement.
+   *
+   * `onMove` fires only once the pointer has travelled past `threshold`, so a
+   * plain tap still reaches `onTap` and the element's own click handler.
+   */
+  export function drag(
+    el: HTMLElement,
+    options: {
+      axis?: "x" | "y" | "both";
+      threshold?: number;
+      onStart?: (e: PointerEvent) => void;
+      onMove?: (info: { dx: number; dy: number; e: PointerEvent }) => void;
+      onEnd?: (info: {
+        dx: number;
+        dy: number;
+        vx: number;
+        vy: number;
+        cancelled: boolean;
+        e: PointerEvent;
+      }) => void;
+      onTap?: (e: PointerEvent) => void;
+    },
+  ): void;
+}

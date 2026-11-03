@@ -42,6 +42,7 @@ export function emptyCounts(): Record<EntityKind, number> {
     reminder: 0,
     filter: 0,
     focusSession: 0,
+  preference: 0,
   };
 }
 

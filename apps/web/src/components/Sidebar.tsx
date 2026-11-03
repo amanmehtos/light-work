@@ -15,6 +15,7 @@ import type { LightStore } from "@light/client-sdk";
 
 export type View =
   | { kind: "today" }
+  | { kind: "day"; day: string }
   | { kind: "upcoming" }
   | { kind: "all" }
   | { kind: "completed" }
@@ -52,13 +53,21 @@ export function Sidebar({
   view,
   onSelect,
   counts,
+  today,
+  rewardsEnabled,
 }: {
   store: LightStore;
   view: View;
   onSelect: (view: View) => void;
   counts: { today: number; upcoming: number; all: number; completed: number };
+  today: string;
+  /** With rewards off the trophy cabinet is hidden, not deleted. */
+  rewardsEnabled: boolean;
 }) {
-  const projects = store.all("project").filter((project) => !project.isArchived);
+  const projects = store
+    .all("project")
+    .filter((project) => !project.isArchived)
+    .filter((project) => rewardsEnabled || !project.isRewards);
   const byParent = new Map<string | null, Project[]>();
   for (const project of projects) {
     const siblings = byParent.get(project.parentId) ?? [];
@@ -95,6 +104,9 @@ export function Sidebar({
 
   const views: { view: View; label: string; count: number }[] = [
     { view: { kind: "today" }, label: "Today", count: counts.today },
+    // The planning surface, as opposed to the list: same tasks, laid out
+    // against the hours they are meant to happen in.
+    { view: { kind: "day", day: today }, label: "Day", count: counts.today },
     { view: { kind: "upcoming" }, label: "Upcoming", count: counts.upcoming },
     { view: { kind: "all" }, label: "All tasks", count: counts.all },
     // Without this, imported history — a Todoist account brings in hundreds of

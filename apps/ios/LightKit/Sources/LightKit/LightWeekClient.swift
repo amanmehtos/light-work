@@ -43,6 +43,10 @@ public actor LightWeekClient {
 
     public func setToken(_ token: String?) { self.token = token }
 
+    /// Ops stamped against this client's clock, so a patch built outside the
+    /// actor still carries the right node and a clock that only moves forward.
+    public func operations() -> Operations { Operations(clock: clock) }
+
     public var isSignedIn: Bool { token != nil }
 
     // MARK: - Sign in
@@ -77,6 +81,7 @@ public actor LightWeekClient {
             public var task: [Task]?
             public var label: [Label]?
             public var focusSession: [FocusSession]?
+            public var preference: [Preference]?
         }
     }
 
@@ -136,7 +141,12 @@ public actor LightWeekClient {
         try await push([op])
     }
 
-    private func push(_ ops: [Op]) async throws {
+    /// Sends ops the caller has already built, usually with `Operations`.
+    ///
+    /// Public because Light Week writes more than focus sessions: the editor,
+    /// the day view and the rewards switch all build their own ops, and the
+    /// alternative is a method on this actor for every field on every entity.
+    public func push(_ ops: [Op]) async throws {
         let request = PushRequest(version: lightWeekProtocolVersion, since: cursor, ops: ops)
         let data = try await send("POST", "/sync", encodable: request)
         let response = try JSONDecoder().decode(SyncResponse.self, from: data)

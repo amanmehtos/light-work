@@ -9,8 +9,9 @@
  * the current light.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ICONS, diurnal, type DiurnalInfo } from "diurnal-ui/diurnal.mjs";
+import { sheet, type SheetApi } from "diurnal-ui/fluid.mjs";
 import { skyHeader } from "diurnal-ui/sky-header.mjs";
 
 export { diurnal };
@@ -112,4 +113,70 @@ export function useScrolled(): boolean {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
   return scrolled;
+}
+
+/**
+ * A bottom sheet.
+ *
+ * Another case of the library mounting itself before React exists: `fluid.mjs`
+ * scans for `.dn-sheet` on import, finds none, and the sheet would sit at
+ * `translateY(100%)` for ever. So it is mounted by hand here, and `open` is a
+ * prop rather than a class — the spring and the drag-to-dismiss are the
+ * library's, this only tells it which way to go.
+ *
+ * The markup stays in the tree while closed, because `sheet()` animates an
+ * element it is holding; unmounting it would mean a new spring every time and
+ * no closing animation at all.
+ */
+export function Sheet({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const api = useRef<SheetApi | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (ref.current === null) return;
+    api.current = sheet(ref.current);
+    // The library closes itself on the scrim, on Escape and on a downward
+    // flick, none of which go through our `open` prop — so React has to hear
+    // about it or the next open would be a no-op against a stale `true`.
+    const el = ref.current;
+    const observer = new MutationObserver(() => {
+      if (el.hidden) onCloseRef.current();
+    });
+    observer.observe(el, { attributes: true, attributeFilter: ["hidden"] });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (api.current === null) return;
+    if (open) api.current.open();
+    else if (api.current.isOpen) api.current.close();
+  }, [open]);
+
+  return (
+    <div className="dn-sheet" ref={ref} hidden>
+      <div className="dn-sheet__scrim" />
+      <div
+        className="dn-sheet__panel dn-material dn-material--thick"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+      >
+        <div className="dn-sheet__handle" aria-hidden="true" />
+        {children}
+      </div>
+    </div>
+  );
 }

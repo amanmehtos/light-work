@@ -107,6 +107,100 @@ describe("completeTask", () => {
   });
 });
 
+describe("rewards", () => {
+  /** The trophies, newest first by nothing in particular — just their contents. */
+  function trophies(): string[] {
+    const cabinet = store.all("project").find((candidate) => candidate.isRewards);
+    if (cabinet === undefined) return [];
+    return store
+      .all("task")
+      .filter((task) => task.projectId === cabinet.id)
+      .map((task) => task.content);
+  }
+
+  it("files the reward, making the Rewards project the first time", () => {
+    const p = project();
+    const task = ops.createTask({
+      projectId: p.id,
+      content: "Ready the deck",
+      reward: "An hour in the sun",
+    }).result;
+
+    expect(store.all("project").some((candidate) => candidate.isRewards)).toBe(false);
+    ops.completeTask(task.id);
+
+    const cabinet = store.all("project").find((candidate) => candidate.isRewards);
+    expect(cabinet?.name).toBe("Rewards");
+    expect(trophies()).toEqual(["An hour in the sun"]);
+
+    // Second time around it files into the same project rather than a new one.
+    const another = ops.createTask({ projectId: p.id, content: "Again", reward: "A long walk" }).result;
+    ops.completeTask(another.id);
+    expect(store.all("project").filter((candidate) => candidate.isRewards)).toHaveLength(1);
+    expect(trophies().sort()).toEqual(["A long walk", "An hour in the sun"]);
+  });
+
+  it("files nothing when the task carries no reward", () => {
+    const p = project();
+    const task = ops.createTask({ projectId: p.id, content: "Unrewarded" }).result;
+    ops.completeTask(task.id);
+
+    expect(store.all("project").some((candidate) => candidate.isRewards)).toBe(false);
+    expect(trophies()).toEqual([]);
+  });
+
+  it("files nothing when rewards are switched off", () => {
+    const p = project();
+    ops.setRewardsEnabled(false);
+    const task = ops.createTask({
+      projectId: p.id,
+      content: "Ready the deck",
+      reward: "An hour in the sun",
+    }).result;
+    ops.completeTask(task.id);
+
+    expect(trophies()).toEqual([]);
+
+    // Switching it back on earns the next one; the reward was never lost.
+    ops.setRewardsEnabled(true);
+    const another = ops.createTask({ projectId: p.id, content: "Again", reward: "A long walk" }).result;
+    ops.completeTask(another.id);
+    expect(trophies()).toEqual(["A long walk"]);
+  });
+
+  it("earns a repeating task its reward on every completion", () => {
+    const p = project();
+    const task = ops.createTask({
+      projectId: p.id,
+      content: "Log wishlists",
+      reward: "A good coffee",
+      due: {
+        date: "2026-10-24",
+        hasTime: false,
+        text: "every saturday",
+        timezone: null,
+        isRecurring: true,
+      },
+    }).result;
+
+    expect(ops.completeTask(task.id, "2026-10-24").result.rescheduled).toBe(true);
+    expect(ops.completeTask(task.id, "2026-10-31").result.rescheduled).toBe(true);
+
+    // Two completions, two trophies — the reward is for doing the thing, not
+    // for being finished with it.
+    expect(trophies()).toEqual(["A good coffee", "A good coffee"]);
+  });
+
+  it("refuses to delete the Rewards project", () => {
+    const p = project();
+    const task = ops.createTask({ projectId: p.id, content: "x", reward: "y" }).result;
+    ops.completeTask(task.id);
+
+    const cabinet = store.all("project").find((candidate) => candidate.isRewards);
+    expect(() => ops.deleteProject(cabinet!.id)).toThrow(/rewards/i);
+  });
+});
+
 describe("reorderTask", () => {
   it("moves a task after another, writing only the task that moved", () => {
     const p = project();

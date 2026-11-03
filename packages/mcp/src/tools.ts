@@ -368,6 +368,12 @@ export function buildTools(): ToolDefinition[] {
         deadlineDate: z.string().optional().describe("YYYY-MM-DD. When the task is owed."),
         durationMinutes: z.number().int().min(1).optional(),
         labels: z.array(z.string()).optional().describe("Label names; unknown ones are created."),
+        reward: z
+          .string()
+          .optional()
+          .describe(
+            "What finishing this earns. On completion it becomes a task in the Rewards project, unless rewards are switched off.",
+          ),
       },
       handler: async (args, context) => {
         if (context.store.get("project", String(args.projectId)) === null) {
@@ -397,6 +403,7 @@ export function buildTools(): ToolDefinition[] {
             ? { duration: { amount: args.durationMinutes, unit: "minute" as const } }
             : {}),
           ...(Array.isArray(args.labels) ? { labelNames: args.labels as string[] } : {}),
+          ...(typeof args.reward === "string" ? { reward: args.reward } : {}),
         });
         await context.flush(staged.ops);
         return result({ task: formatTask(context, staged.result) });
@@ -418,6 +425,11 @@ export function buildTools(): ToolDefinition[] {
         due: dueSchema.nullable().optional().describe("Pass null to unschedule."),
         deadlineDate: z.string().nullable().optional(),
         durationMinutes: z.number().int().min(1).nullable().optional(),
+        reward: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("What finishing this earns. On completion it becomes a task in the Rewards project, unless rewards are switched off." + " Pass null to clear it."),
       },
       handler: async (args, context) => {
         const task = context.store.get("task", String(args.taskId));
@@ -441,6 +453,10 @@ export function buildTools(): ToolDefinition[] {
             args.durationMinutes === null
               ? null
               : { amount: Number(args.durationMinutes), unit: "minute" };
+        }
+
+        if (args.reward !== undefined) {
+          changes.reward = args.reward === null ? null : String(args.reward);
         }
 
         const staged = context.ops.updateTask(task.id, changes);

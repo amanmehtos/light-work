@@ -90,6 +90,7 @@ export function TaskRow({
   selected,
   onComplete,
   onSelect,
+  onEdit,
   onMoveUp,
   onMoveDown,
 }: {
@@ -100,6 +101,7 @@ export function TaskRow({
   selected: boolean;
   onComplete: () => void;
   onSelect: () => void;
+  onEdit: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
 }) {
@@ -118,11 +120,15 @@ export function TaskRow({
       {/* Selecting a task lifts it off the page — elevation is how this system
           says "this one". */}
       <div className={`dn-card dn-row task${selected ? " selected" : ""}`} style={selected ? { ["--dn-elev" as string]: "18px" } : undefined}>
-        <label className="dn-check">
+        {/* Large on purpose: finishing something is the most common act in
+            this app, and it is also how you put a task back — a completed row
+            stays in place with the box filled, so clicking it again is the
+            obvious way to reopen rather than something to go looking for. */}
+        <label className="dn-check check-big">
           <input
             type="checkbox"
             checked={task.isCompleted}
-            aria-label={`Complete ${task.content}`}
+            aria-label={task.isCompleted ? `Reopen ${task.content}` : `Complete ${task.content}`}
             onChange={onComplete}
           />
         </label>
@@ -165,6 +171,14 @@ export function TaskRow({
               </span>
             ))}
 
+            {/* Shown on the row because it is the point: the reward is what
+                makes finishing worth starting. */}
+            {task.reward !== null && task.reward !== "" && (
+              <span className="dn-badge dn-badge--outline reward" title="What finishing this earns">
+                ★ {task.reward}
+              </span>
+            )}
+
             {focus.sessions > 0 && (
               <span className="dn-badge dn-badge--outline" title={`${focus.sessions} focus session(s)`}>
                 focused {humanDuration(focus.focusedSeconds)}
@@ -181,6 +195,14 @@ export function TaskRow({
               to nothing and the click does nothing, which is honest and costs
               nothing. Reading the user agent to hide it would be guesswork that
               breaks on the next device. */}
+          <button
+            type="button"
+            className="dn-btn dn-btn--ghost dn-btn--sm"
+            aria-label={`Edit ${task.content}`}
+            onClick={onEdit}
+          >
+            Edit
+          </button>
           {!task.isCompleted && (
             <a
               className="dn-btn dn-btn--ghost dn-btn--sm"
