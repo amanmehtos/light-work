@@ -179,3 +179,120 @@ final class TaskChangesTests: XCTestCase {
         XCTAssertEqual(due["date"], JSONValue.string("2026-11-03T09:00:00.000Z"))
     }
 }
+
+/// Making a task, on the phone.
+final class CreateTests: XCTestCase {
+
+    private var ops: Operations!
+
+    override func setUp() {
+        super.setUp()
+        ops = Operations(clock: Clock(node: "test-device"))
+    }
+
+    private func existing(_ order: String, in project: String = "p1",
+                          section: String? = nil, parent: String? = nil) -> LightKit.Task {
+        LightKit.Task(
+            id: LightID.new(), projectId: project, sectionId: section, parentId: parent,
+            content: "x", description: "", priority: .none, order: order,
+            due: nil, deadline: nil, duration: nil, labelIds: [], reward: nil,
+            isCompleted: false, completedAt: nil, createdAt: "2026-11-01T00:00:00.000Z")
+    }
+
+    private func patch(_ op: Op) -> [String: JSONValue] {
+        guard case .object(let fields)? = op.fields else { return [:] }
+        return fields
+    }
+
+    func testMakesAnOpenTaskInTheProjectItWasGiven() throws {
+        let (task, staged) = try ops.create(content: "Buy milk", projectId: "p1", existing: [])
+        XCTAssertEqual(task.content, "Buy milk")
+        XCTAssertEqual(task.projectId, "p1")
+        XCTAssertFalse(task.isCompleted)
+        XCTAssertEqual(task.priority, .none)
+        XCTAssertEqual(staged.count, 1)
+        XCTAssertEqual(staged[0].kind, "task")
+        XCTAssertEqual(staged[0].entityId, task.id)
+    }
+
+    func testTrimsTheTitle() throws {
+        let (task, _) = try ops.create(content: "  Buy milk \n", projectId: "p1", existing: [])
+        XCTAssertEqual(task.content, "Buy milk")
+    }
+
+    func testRefusesATitleOfOnlySpaces() {
+        XCTAssertThrowsError(try ops.create(content: "   ", projectId: "p1", existing: [])) { error in
+            XCTAssertEqual(error as? Operations.CreateError, .emptyTitle)
+        }
+        XCTAssertThrowsError(try ops.create(content: "", projectId: "p1", existing: []))
+    }
+
+    func testGoesAtTheEndOfItsOwnList() throws {
+        let list = [existing("V"), existing("a"), existing("k")]
+        let (task, _) = try ops.create(content: "Last", projectId: "p1", existing: list)
+        XCTAssertGreaterThan(task.order, "k", "after everything already there")
+    }
+
+    func testIsNotPlacedByOtherListsOrBySubtasks() throws {
+        // Another project's keys, a section's, and a subtask's say nothing
+        // about where the end of this list is — and the web ignores them too.
+        let others = [
+            existing("z", in: "p2"),
+            existing("y", section: "s1"),
+            existing("x", parent: "t1"),
+        ]
+        let (task, _) = try ops.create(content: "First here", projectId: "p1", existing: others)
+        XCTAssertEqual(task.order, Order.afterLast([]))
+    }
+
+    func testTwoInARowKeepTheirOrder() throws {
+        var list: [LightKit.Task] = []
+        var made: [LightKit.Task] = []
+        for title in ["one", "two", "three"] {
+            let (task, _) = try ops.create(content: title, projectId: "p1", existing: list)
+            list.append(task)
+            made.append(task)
+        }
+        XCTAssertEqual(made.sorted { $0.order < $1.order }.map(\.content), ["one", "two", "three"])
+    }
+
+    func testWritesEveryFieldTheWebReadsOrNullWhereThereIsNone() throws {
+        let (_, staged) = try ops.create(content: "Buy milk", projectId: "p1", existing: [])
+        let written = patch(staged[0])
+
+        // The twenty fields of `Task` in packages/core/src/entities.ts. A
+        // missing `parentId` is read there as "not null", which would hide the
+        // task from its project, so absence is not an acceptable way to say
+        // "none".
+        XCTAssertEqual(written.keys.sorted(), [
+            "addedById", "assigneeId", "completedAt", "content", "createdAt", "dayOrder",
+            "deadline", "description", "due", "duration", "id", "isCollapsed", "isCompleted",
+            "labelIds", "order", "parentId", "priority", "projectId", "reward", "sectionId",
+        ])
+        for key in ["parentId", "sectionId", "dayOrder", "due", "deadline", "duration",
+                    "reward", "completedAt", "assigneeId", "addedById"] {
+            XCTAssertEqual(written[key], JSONValue.null, key)
+        }
+        XCTAssertEqual(written["isCompleted"], JSONValue.bool(false))
+        XCTAssertEqual(written["isCollapsed"], JSONValue.bool(false))
+        XCTAssertEqual(written["labelIds"], JSONValue.array([]))
+        XCTAssertEqual(written["description"], JSONValue.string(""))
+    }
+
+    func testTheOpAndTheTaskAgree() throws {
+        let (task, staged) = try ops.create(
+            content: "Buy milk", projectId: "p1", existing: [existing("V")], priority: .urgent)
+        let written = patch(staged[0])
+        XCTAssertEqual(written["id"], JSONValue.string(task.id))
+        XCTAssertEqual(written["content"], JSONValue.string(task.content))
+        XCTAssertEqual(written["order"], JSONValue.string(task.order))
+        XCTAssertEqual(written["priority"], JSONValue.integer(1))
+        XCTAssertEqual(written["createdAt"], JSONValue.string(task.createdAt))
+    }
+
+    func testEveryTaskGetsItsOwnId() throws {
+        let a = try ops.create(content: "a", projectId: "p1", existing: []).task
+        let b = try ops.create(content: "b", projectId: "p1", existing: []).task
+        XCTAssertNotEqual(a.id, b.id)
+    }
+}

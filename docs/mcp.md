@@ -92,6 +92,7 @@ It refuses to start on a bad token rather than failing on the first tool call.
 | `get_week_plan` | ✓ | The whole picture for a window, in one call |
 | `get_focus_stats` | ✓ | Where attention actually went |
 | `create_task` | | |
+| `create_task_from_text` | | One line in Todoist's shorthand; refuses anything it cannot read with certainty |
 | `update_task` | | Sparse — omitted fields are untouched |
 | `complete_task` | | Reschedules instead, when the task recurs |
 | `delete_task` | | Cascades to subtasks |
@@ -136,6 +137,24 @@ the repeat silently stopped.
 
 `complete_task` returns `rescheduled: true|false` and warns when a recurrence
 existed but could not be read.
+
+### `create_task_from_text` is stricter than the text field
+
+It runs the same parser as the web app's add-task line
+(`packages/client-sdk/src/parse.ts`), with one difference that is not
+optional: the text field shows what it read as chips you can dismiss, and an
+agent has no chips. So where the field would show a guess, this tool fails.
+
+It refuses, naming the text it could not read and creating nothing, on: a date
+with a modifier ("next friday", "by friday", "friday morning"); a day it would
+have had to assume ("next week", "friday" said on a Friday, "jan 5" after 5
+January, a time with no day); a time with no am/pm ("at 5", "9:30"); two dates;
+a date in the middle of a sentence; a repeat it cannot read ("every other
+tuesday"); and a `#Project` that does not exist. The dependable forms are an
+ISO date (`2026-11-20`), `today`, `tomorrow`, a weekday name, `in 3 days`,
+`dec 25`, a time with am/pm, and `every weekday` / `every 3 days` /
+`every monday`. Anything else, use `create_task`, which takes explicit fields.
+There is no `strict: false`.
 
 ## Safety
 

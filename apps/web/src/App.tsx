@@ -3,7 +3,7 @@ import { compareOrder, type Task } from "@light/core";
 import { loadSession, logout, readConsentRequest, type StoredSession } from "./auth.js";
 import { Sky, ThemeToggle, describeLight, useDiurnal, useScrolled } from "./diurnal.js";
 import { useLightWeek } from "./store-hook.js";
-import { AddTask, type ParsedEntry } from "./components/AddTask.js";
+import { AddTask, type AddRequest } from "./components/AddTask.js";
 import { Consent } from "./components/Consent.js";
 import { Day } from "./components/Day.js";
 import { Preferences } from "./components/Preferences.js";
@@ -12,6 +12,7 @@ import { Sidebar, type View } from "./components/Sidebar.js";
 import { TaskEditor } from "./components/TaskEditor.js";
 import { TaskRow } from "./components/TaskRow.js";
 import { dueDay, localDay } from "./schedule.js";
+import { foldSubtasks } from "./subtasks.js";
 
 function todayISO(): string {
   // Local calendar day, which is what "Today" has to mean to a user.
@@ -68,11 +69,13 @@ function Workspace({
   session: StoredSession;
   onSignOut: () => void;
 }) {
-  const { store, ops, status, revision, commit, ready, error } = useLightWeek(session.token);
+  const { store, ops, status, revision, commit, ready, error } = useLightWeek(session.token, session.user.id);
   const [view, setView] = useState<View>({ kind: "today" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  // Why the last add did not happen, when it did not. Almost always nothing.
+  const [addError, setAddError] = useState<string | null>(null);
   const today = todayISO();
 
   // Read through `ops` rather than the store so the default — on — lives in
@@ -81,7 +84,7 @@ function Workspace({
 
   // `revision` is the dependency that matters: the store lives outside React,
   // so this recomputes when it changes rather than when props do.
-  const { visible, counts, inboxProjectId } = useMemo(() => {
+  const { visible, parentTitles, counts, inboxProjectId, namedProjects } = useMemo(() => {
     // With rewards off the project and its contents go quiet together —
     // leaving the trophies loose in Today would be the opposite of hiding it.
     const hidden = new Set(
@@ -141,49 +144,84 @@ function Workspace({
       list = [...list].sort((a, b) => compareOrder(a.order, b.order));
     }
 
+    // The three views that are filters over everything share one rule for
+    // subtasks; the others are already scoped (a project lists its roots) or are
+    // a record rather than a plan (Completed).
+    const fold = (tasks: Task[]) => foldSubtasks(tasks, (id) => store.get("task", id)).tasks;
+
+    let parentTitles = new Map<string, string>();
+    if (view.kind === "today" || view.kind === "upcoming" || view.kind === "all") {
+      const folded = foldSubtasks(list, (id) => store.get("task", id));
+      list = folded.tasks;
+      parentTitles = folded.parentTitles;
+    }
+
     const inbox = store.all("project").find((project) => project.isInbox);
-    const firstProject = store.ordered("project")[0];
 
     return {
       visible: list,
+      parentTitles,
       counts: {
-        today: todayTasks.length,
-        upcoming: upcoming.length,
-        all: open.length,
+        // Counted after folding, and each list folded on its own, because the
+        // sidebar shows all four at once while only one of them is the view
+        // being rendered. Counting the unfolded list instead would put "5"
+        // beside three rows the moment an account had a subtask — which reads
+        // as the app having lost two tasks, not as a subtlety about nesting.
+        // Completed is not folded, so it is not counted that way either.
+        today: fold(todayTasks).length,
+        upcoming: fold(upcoming).length,
+        all: fold(open).length,
         completed: completed.length,
       },
-      inboxProjectId: inbox?.id ?? firstProject?.id ?? null,
+      // No fall back to "whichever project is first": a task with nowhere said
+      // belongs in the inbox, and `addTask` makes one if there is not yet one.
+      inboxProjectId: inbox?.id ?? null,
+      // What a `#Name` in the add-task line can point at. Built here, with the
+      // rest of what depends on the store, so it keeps one identity between
+      // revisions and the line is not re-read on every unrelated render. The
+      // trophy cabinet is not somewhere to file a task by hand.
+      namedProjects: store
+        .all("project")
+        .filter((project) => !project.isArchived && !project.isRewards)
+        .map((project) => ({ id: project.id, name: project.name })),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store, view, today, revision, rewardsEnabled]);
 
+  // The sidebar's Inbox entry and every default destination assume one exists,
+  // and nothing but a Todoist import used to make it one. Waits for `ready`
+  // and a clean start: ensuring before the first snapshot lands would find an
+  // empty store and mint a second inbox next to the account's real one.
+  useEffect(() => {
+    if (!ready || error !== null) return;
+    if (store.all("project").some((project) => project.isInbox)) return;
+    commit(ops.ensureInbox().ops);
+  }, [ready, error, revision, store, ops, commit]);
+
   const targetProjectId = view.kind === "project" ? view.projectId : inboxProjectId;
 
-  function addTask(entry: ParsedEntry, dueDate: string | null) {
-    let projectId = targetProjectId;
-
-    // A brand-new account has no projects at all, so the first task creates
-    // somewhere to put itself rather than failing.
-    const staged = [];
-    if (projectId === null) {
-      const created = ops.createProject({ name: "Inbox" });
-      staged.push(...created.ops);
-      projectId = created.result.id;
+  function addTask(request: AddRequest) {
+    // Through `createTaskFromText`, which ends in `createTask`, so a task typed
+    // here is made the same way as one an agent makes from the same line. When
+    // there is no inbox yet — a task added before the first sync has finished,
+    // or while it has failed outright — it returns the real one if it has
+    // arrived and makes one only when there is genuinely none, in the same
+    // batch as the task so neither can be sent without the other.
+    try {
+      const created = ops.createTaskFromText(request.text, {
+        today,
+        ...(targetProjectId !== null ? { defaultProjectId: targetProjectId } : {}),
+        now: request.now,
+        ignore: request.ignore,
+        dueDate: request.dueDate,
+      });
+      commit(created.ops);
+      setAddError(null);
+    } catch (error) {
+      // Only a time that does not exist (clocks going forward) can land here;
+      // the field has already refused an empty title. Said rather than lost.
+      setAddError(error instanceof Error ? error.message : "That task could not be added.");
     }
-
-    const task = ops.createTask({
-      projectId,
-      content: entry.content,
-      ...(entry.description !== "" ? { description: entry.description } : {}),
-      priority: entry.priority,
-      ...(entry.labels.length > 0 ? { labelNames: entry.labels } : {}),
-      due:
-        dueDate === null
-          ? null
-          : { date: dueDate, hasTime: false, text: null, timezone: null, isRecurring: false },
-    });
-    staged.push(...task.ops);
-    commit(staged);
   }
 
   function complete(task: Task) {
@@ -275,6 +313,11 @@ function Workspace({
           {error}
         </div>
       )}
+      {addError !== null && (
+        <div role="alert" className="dn-well banner">
+          {addError}
+        </div>
+      )}
 
       <div className="body">
         <div className="dn-card dn-card--flat sidebar-panel">
@@ -294,7 +337,9 @@ function Workspace({
             <p className="dn-prose project-description">{project.description}</p>
           )}
 
-          {view.kind !== "day" && <AddTask onAdd={addTask} disabled={!ready} />}
+          {view.kind !== "day" && (
+            <AddTask onAdd={addTask} disabled={!ready} today={today} projects={namedProjects} />
+          )}
 
           {!ready ? (
             <p className="dn-hint pad">Loading your tasks…</p>
@@ -329,6 +374,7 @@ function Workspace({
                   store={store}
                   ops={ops}
                   today={today}
+                  parentTitle={parentTitles.get(task.id) ?? null}
                   selected={selectedId === task.id}
                   onComplete={() => complete(task)}
                   onSelect={() => setSelectedId(selectedId === task.id ? null : task.id)}

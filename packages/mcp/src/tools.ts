@@ -12,7 +12,7 @@
  */
 
 import { compareOrder, type Due, type Priority, type Task } from "@light/core";
-import { parseRecurrence } from "@light/client-sdk";
+import { meaning, parseRecurrence, QuickAddRefusal } from "@light/client-sdk";
 import { z } from "zod";
 import type { ToolContext } from "./context.js";
 import { failure, formatProject, formatTask, humanDuration, projectPath, result } from "./format.js";
@@ -407,6 +407,55 @@ export function buildTools(): ToolDefinition[] {
         });
         await context.flush(staged.ops);
         return result({ task: formatTask(context, staged.result) });
+      },
+    },
+
+    {
+      name: "create_task_from_text",
+      title: "Create a task from a line of text",
+      description:
+        "Reads a line like \"pay rent tomorrow 9am p1 @errand #Home\" into a task: a date, a " +
+        "time, a repeat (\"every weekday\"), a priority (p1-p4), labels (@name), a project " +
+        "(#Name) and notes (after //). It is deliberately strict. Anything it cannot read " +
+        "with certainty — \"next friday\", \"by friday\", a time with no am/pm, a day it " +
+        "had to assume, a project that does not exist — fails with a message naming it, and " +
+        "nothing is created. When that happens, say the date outright (2026-11-20) or use " +
+        "create_task, which takes every field explicitly and never guesses. Without a #Project " +
+        "the task goes in projectId if given, else the inbox.",
+      readOnly: false,
+      inputSchema: {
+        text: z.string().min(1),
+        projectId: z.string().optional().describe("Where it goes when the text names no #Project."),
+      },
+      handler: async (args, context) => {
+        if (typeof args.projectId === "string" && context.store.get("project", args.projectId) === null) {
+          return failure(`No project with id ${args.projectId}.`);
+        }
+
+        // Strict is not a parameter. The one caller here has no chip to show
+        // and nobody watching, which is exactly the case it exists for, and an
+        // argument an agent could set to false would be an argument that undid it.
+        let staged: ReturnType<typeof context.ops.createTaskFromText>;
+        try {
+          staged = context.ops.createTaskFromText(String(args.text), {
+            today: context.today(),
+            timezone: context.timezone ?? "UTC",
+            ...(context.now === undefined ? {} : { now: context.now() }),
+            strict: true,
+            ...(typeof args.projectId === "string" ? { defaultProjectId: args.projectId } : {}),
+          });
+        } catch (error) {
+          if (error instanceof QuickAddRefusal) return failure(`${error.message} Use create_task to set the fields exactly.`);
+          return failure(error instanceof Error ? error.message : "could not read that line");
+        }
+
+        await context.flush(staged.ops);
+        return result({
+          task: formatTask(context, staged.result.task),
+          // What was taken from the text and what it became, so the agent can
+          // check the reading against what it meant.
+          read: staged.result.parse.tokens.map((token) => ({ text: token.text, as: meaning(token) })),
+        });
       },
     },
 

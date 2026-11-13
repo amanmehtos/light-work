@@ -85,6 +85,13 @@ struct TaskListView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
 
+            if surface == .list {
+                ComposeBar(destination: model.defaultProject?.name) { title in
+                    guard let project = model.defaultProject else { return }
+                    model.create(content: title, projectId: project.id)
+                }
+            }
+
             switch surface {
             case .day:
                 DayView(model: model, day: $day) { editing = $0 }

@@ -7,7 +7,13 @@
  * avoids mirroring the whole account into component state.
  */
 
-import { LightStore, Operations, SyncClient, type SyncStatus } from "@light/client-sdk";
+import {
+  LightStore,
+  Operations,
+  SyncClient,
+  WebQueueStorage,
+  type SyncStatus,
+} from "@light/client-sdk";
 import { newNodeId, type Op } from "@light/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE } from "./auth.js";
@@ -46,7 +52,14 @@ export interface LightWeek {
   error: string | null;
 }
 
-export function useLightWeek(token: string): LightWeek {
+/**
+ * The queue is kept per account, not per browser. A browser is shared: ops that
+ * one person queued and never sent must not be pushed into the next person's
+ * account when they sign in, which one global key would do.
+ */
+const QUEUE_KEY = "light-week.queue";
+
+export function useLightWeek(token: string, userId: string): LightWeek {
   const store = useMemo(() => new LightStore(deviceNode()), []);
   const ops = useMemo(() => new Operations(store), [store]);
   const [revision, setRevision] = useState(0);
@@ -66,6 +79,7 @@ export function useLightWeek(token: string): LightWeek {
       baseUrl: API_BASE,
       token,
       store,
+      storage: new WebQueueStorage(`${QUEUE_KEY}:${userId}`),
       onStatus: (next) => {
         if (!cancelled) setStatus(next);
       },
@@ -92,7 +106,7 @@ export function useLightWeek(token: string): LightWeek {
       client.disconnect();
       clientRef.current = null;
     };
-  }, [store, token]);
+  }, [store, token, userId]);
 
   const commit = useCallback((staged: Op[]) => {
     if (staged.length === 0) return;

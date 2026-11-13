@@ -10,7 +10,7 @@
  * making a request back to itself.
  */
 
-import { LightStore, Operations } from "@light/client-sdk";
+import { clockAt, LightStore, Operations } from "@light/client-sdk";
 import { newNodeId, type Cursor, type JsonObject, type Op } from "@light/core";
 import type { ToolContext } from "./context.js";
 
@@ -114,6 +114,11 @@ export class Session {
       ops: this.ops,
       flush: (ops) => this.flush(ops),
       today: () => this.today(),
+      // The same zone `today()` reads in, or UTC when there is none — that is
+      // what `today()` does too, and "tomorrow 9am" has to mean the same
+      // tomorrow as the date it is read against.
+      timezone: this.timezone ?? "UTC",
+      now: () => clockAt(new Date(), this.timezone ?? "UTC"),
     };
   }
 }

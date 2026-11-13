@@ -16,4 +16,13 @@ export interface ToolContext {
   flush: (ops: Op[]) => Promise<void>;
   /** Today, as `YYYY-MM-DD`, in the user's timezone. */
   today: () => string;
+  /**
+   * The IANA zone `today` is read in, and so the zone a time of day in a
+   * task's text means. Optional so a caller that builds a context by hand does
+   * not have to know about it; the tools that need one fall back to UTC, which
+   * is what `Session.today` does when it has no zone either.
+   */
+  timezone?: string;
+  /** The wall-clock time now, `HH:MM`, in that zone. Optional like `timezone`. */
+  now?: () => string;
 }

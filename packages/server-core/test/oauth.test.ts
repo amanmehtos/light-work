@@ -492,6 +492,7 @@ describe("scope enforcement", () => {
     expect(names).toContain("get_week_plan");
     expect(names).not.toContain("delete_task");
     expect(names).not.toContain("create_task");
+    expect(names).not.toContain("create_task_from_text");
   });
 
   it("offers everything to a full grant", async () => {

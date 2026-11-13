@@ -29,7 +29,7 @@ editing `project.pbxproj`.
 | `Services/LightWeekAuth.swift` | The authorization code flow, and the grant in the Keychain |
 | `Services/FocusHandoff.swift` | The `com.lightminute.app:/focus?…` link |
 | `ViewModels/TaskListModel.swift` | The snapshot, turned into rows with focus totals |
-| `Views/` | The list, the row, the sign-in screen, the badges |
+| `Views/` | The list, the row, the compose bar, the sign-in screen, the badges |
 
 The OAuth flow is **ported from Light Minute's**, which was driven against both
 the deployed worker and the real request handler before this existed. The client

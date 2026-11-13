@@ -21,12 +21,62 @@ import {
   newId,
   PREFERENCES_ID,
 } from "@light/core";
+import {
+  parseQuickAdd,
+  parseQuickAddStrict,
+  type Problem,
+  type QuickAddParse,
+  type QuickAddSchedule,
+} from "./parse.js";
 import { nextOccurrence, parseRecurrence } from "./recurrence.js";
 import type { LightStore } from "./store.js";
+import { instantAt } from "./wallclock.js";
 
 export interface Staged<T> {
   result: T;
   ops: Op[];
+}
+
+/**
+ * A strict Quick Add that would not read a line, and what it could not read.
+ *
+ * Thrown rather than returned so that nothing can stage an op from a refused
+ * parse by forgetting to look: the write simply does not happen. `message`
+ * already names every problem, quoting the text, and is meant to be handed
+ * straight back to whoever typed the line.
+ */
+export class QuickAddRefusal extends Error {
+  constructor(
+    readonly problems: Problem[],
+    message: string,
+  ) {
+    super(message);
+    this.name = "QuickAddRefusal";
+  }
+}
+
+export interface QuickAddInput {
+  /** The local calendar day, `YYYY-MM-DD`. Every relative date is read against it. */
+  today: string;
+  /** Where the task goes when the text names no `#Project`. The inbox when absent. */
+  defaultProjectId?: string;
+  /** IANA zone a time of day is read in. The machine's own when absent. */
+  timezone?: string;
+  /** The wall-clock time now, `HH:MM`, on `today`; see `QuickAddOptions.now`. */
+  now?: string;
+  /**
+   * Refuse, rather than proceed, on anything the parser declined or had to
+   * assume. For callers with nobody watching — see `parseQuickAddStrict`.
+   */
+  strict?: boolean;
+  /** Token text the person took back; see `QuickAddOptions.ignore`. */
+  ignore?: readonly string[];
+  /**
+   * A day chosen outright, which replaces whatever schedule the text gave. The
+   * add-task field's date input is the answer when the parser is wrong, and it
+   * has to be able to win.
+   */
+  dueDate?: string | null;
 }
 
 export class Operations {
@@ -66,7 +116,18 @@ export class Operations {
     view?: Project["view"];
     isFavorite?: boolean;
     description?: string;
+    /**
+     * Marks the account's inbox. Almost nothing should pass this — `ensureInbox`
+     * is the way to get one — and it refuses to make a second.
+     */
+    isInbox?: boolean;
   }): Staged<Project> {
+    // The only-one rule lives here as well as in `ensureInbox`, because this is
+    // the door a caller with a flag in hand would use, and every view of the
+    // account assumes the inbox is a single place.
+    if (input.isInbox === true && this.store.all("project").some((p) => p.isInbox)) {
+      throw new Error("the account already has an inbox");
+    }
     const parentId = input.parentId ?? null;
     const siblings = this.store
       .all("project")
@@ -82,12 +143,59 @@ export class Operations {
       view: input.view ?? "list",
       isFavorite: input.isFavorite ?? false,
       isArchived: false,
-      isInbox: false,
+      isInbox: input.isInbox ?? false,
       isRewards: false,
       isCollapsed: false,
       description: input.description ?? "",
     };
     return { result: project, ops: [this.store.mutate("project", project.id, project)] };
+  }
+
+  /**
+   * The account's inbox: where a task goes when nobody said where.
+   *
+   * Until this existed nothing but the Todoist importer ever set `isInbox`, so
+   * an account that had never imported had a project that was merely *named*
+   * "Inbox" — one `deleteProject` would happily delete, because the guard keys
+   * off the flag and not the name. This makes the flag true for everyone.
+   *
+   * Three cases, in order. An `isInbox` project is returned as it is. Failing
+   * that, a top-level project literally called "Inbox" is adopted rather than
+   * joined by a twin: it is what the web app used to create, so for every
+   * account that predates this method it *is* the inbox, minus the flag, and
+   * flagging it is a one-field edit where a second "Inbox" in the sidebar would
+   * be a visible regression. Only when neither exists is one created.
+   *
+   * "Only ever one" is enforced against what this store can see. Two devices
+   * that both open a brand-new account before either has synced can each
+   * create one, and nothing here can prevent that; when it happens every
+   * device agrees which one to use (the lowest id), so the extra is inert
+   * rather than a split-brain.
+   */
+  ensureInbox(): Staged<Project> {
+    const projects = this.store.all("project");
+
+    // Sorted by id, not by `compareOrder`: that compares fractional-index
+    // `order` keys, and an id is not one. Ids are time-prefixed, so plain
+    // lexicographic order is creation order — which is all this needs, a rule
+    // every device will reach the same answer by.
+    const byId = (a: Project, b: Project) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+    const flagged = projects.filter((project) => project.isInbox).sort(byId);
+    if (flagged[0] !== undefined) return { result: flagged[0], ops: [] };
+
+    const named = projects
+      .filter(
+        (project) =>
+          project.name === "Inbox" && project.parentId === null && !project.isRewards,
+      )
+      .sort(byId);
+    if (named[0] !== undefined) {
+      const op = this.store.mutate("project", named[0].id, { isInbox: true });
+      return { result: this.store.get("project", named[0].id) ?? named[0], ops: [op] };
+    }
+
+    return this.createProject({ name: "Inbox", isInbox: true });
   }
 
   createSection(input: {
@@ -180,6 +288,111 @@ export class Operations {
     };
     ops.push(this.store.mutate("task", task.id, task));
     return { result: task, ops };
+  }
+
+  /**
+   * Makes a task out of a line of text: `pay rent tomorrow 9am p1 @errand #Home`.
+   *
+   * This is the single path every Quick Add takes — the web field and the MCP
+   * tool — and it ends in `createTask`, so a task made from text is
+   * indistinguishable from one made from fields. In particular it routes
+   * through `Operations`, which is where the rewards rule lives; a parallel
+   * way of making tasks would be a place it silently did not fire.
+   *
+   * Where it files the task: the project the text names, else
+   * `defaultProjectId`, else the inbox (made now if there is none, and staged
+   * in the same batch so a first task and its inbox arrive together).
+   *
+   * Labels are matched to existing ones ignoring case. `createLabel` compares
+   * exactly, and "@Errand" next to an existing "errand" should be the same
+   * label rather than a second one that differs by a capital.
+   *
+   * With `strict`, a line the parser declined part of — or read only by
+   * assuming — throws `QuickAddRefusal` before anything is staged, no label
+   * and no inbox included.
+   */
+  createTaskFromText(text: string, input: QuickAddInput): Staged<{ task: Task; parse: QuickAddParse }> {
+    const projects = this.store
+      .all("project")
+      .filter((project) => !project.isArchived && !project.isRewards)
+      .map((project) => ({ id: project.id, name: project.name }));
+    const options = {
+      today: input.today,
+      projects,
+      ...(input.now === undefined ? {} : { now: input.now }),
+      ...(input.ignore === undefined ? {} : { ignore: input.ignore }),
+    };
+
+    let parse: QuickAddParse;
+    if (input.strict === true) {
+      const checked = parseQuickAddStrict(text, options);
+      if (!checked.ok) throw new QuickAddRefusal(checked.problems, checked.message);
+      parse = checked.parse;
+    } else {
+      parse = parseQuickAdd(text, options);
+    }
+    if (parse.title === "") {
+      throw new Error("a task needs a title, and nothing is left once the shorthand is taken out");
+    }
+
+    const ops: Op[] = [];
+    let projectId = parse.projectId ?? input.defaultProjectId ?? null;
+    if (projectId !== null && this.store.get("project", projectId) === null) {
+      throw new Error(`no project with id ${projectId}`);
+    }
+    if (projectId === null) {
+      const inbox = this.ensureInbox();
+      ops.push(...inbox.ops);
+      projectId = inbox.result.id;
+    }
+
+    const known = this.store.all("label");
+    const labelNames = parse.labels.map(
+      (name) => known.find((label) => label.name.toLowerCase() === name.toLowerCase())?.name ?? name,
+    );
+
+    const created = this.createTask({
+      projectId,
+      content: parse.title,
+      ...(parse.description !== "" ? { description: parse.description } : {}),
+      ...(parse.priority !== null ? { priority: parse.priority } : {}),
+      ...(labelNames.length > 0 ? { labelNames } : {}),
+      due: this.dueFromText(parse.schedule, input),
+    });
+    ops.push(...created.ops);
+    return { result: { task: created.result, parse }, ops };
+  }
+
+  /**
+   * The `Due` for a parsed schedule: an all-day date, a timed instant, or a
+   * repeat — in which `text` is the phrase as typed, because completing the
+   * task re-reads it to find the next day.
+   */
+  private dueFromText(schedule: QuickAddSchedule | null, input: QuickAddInput): Due | null {
+    if (input.dueDate !== undefined && input.dueDate !== null) {
+      return { date: input.dueDate, hasTime: false, text: null, timezone: null, isRecurring: false };
+    }
+    if (schedule === null) return null;
+
+    let date = schedule.date;
+    let hasTime = false;
+    if (schedule.time !== null) {
+      const [hours, minutes] = schedule.time.split(":").map(Number) as [number, number];
+      const instant = instantAt(schedule.date, hours * 60 + minutes, input.timezone);
+      if (instant === null) {
+        const where = input.timezone === undefined ? "" : ` in ${input.timezone}`;
+        throw new Error(`${schedule.time} does not exist on ${schedule.date}${where}, because the clocks change then`);
+      }
+      date = instant;
+      hasTime = true;
+    }
+    return {
+      date,
+      hasTime,
+      text: schedule.recurrence?.text ?? null,
+      timezone: hasTime ? (input.timezone ?? null) : null,
+      isRecurring: schedule.recurrence !== null,
+    };
   }
 
   updateTask(

@@ -87,6 +87,7 @@ export function TaskRow({
   store,
   ops,
   today,
+  parentTitle = null,
   selected,
   onComplete,
   onSelect,
@@ -98,6 +99,8 @@ export function TaskRow({
   store: LightStore;
   ops: Operations;
   today: string;
+  /** Set when this is a subtask shown away from its parent; see `foldSubtasks`. */
+  parentTitle?: string | null;
   selected: boolean;
   onComplete: () => void;
   onSelect: () => void;
@@ -185,6 +188,10 @@ export function TaskRow({
               </span>
             )}
           </span>
+
+          {/* A subtask on its own would read as an unrelated task, so it says
+              whose it is. */}
+          {parentTitle !== null && <span className="dn-hint description">Subtask of {parentTitle}</span>}
 
           {task.description !== "" && <span className="dn-hint description">{task.description}</span>}
         </button>

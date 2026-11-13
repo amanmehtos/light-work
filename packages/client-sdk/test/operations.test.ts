@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { compareOrder } from "@light/core";
-import { Operations } from "../src/operations.js";
+import { Operations, QuickAddRefusal } from "../src/operations.js";
 import { LightStore } from "../src/store.js";
 
 let store: LightStore;
@@ -399,5 +399,323 @@ describe("focus sessions", () => {
       source: "light-minute-ios",
     });
     expect(ops.focusStatsForTask(task.id).focusedSeconds).toBe(0);
+  });
+});
+
+describe("ensureInbox", () => {
+  it("creates an inbox when the account has none", () => {
+    const staged = ops.ensureInbox();
+
+    expect(staged.result.name).toBe("Inbox");
+    expect(staged.result.isInbox).toBe(true);
+    expect(staged.result.parentId).toBeNull();
+    expect(staged.ops.length).toBeGreaterThan(0);
+    // Already applied locally, like every other operation.
+    expect(store.get("project", staged.result.id)?.isInbox).toBe(true);
+  });
+
+  it("returns the existing inbox, staging nothing, when there is one", () => {
+    const first = ops.ensureInbox().result;
+    const again = ops.ensureInbox();
+
+    expect(again.result.id).toBe(first.id);
+    expect(again.ops).toEqual([]);
+  });
+
+  it("never creates a second, however often it is called", () => {
+    for (let i = 0; i < 5; i++) ops.ensureInbox();
+
+    expect(store.all("project").filter((p) => p.isInbox)).toHaveLength(1);
+    expect(store.all("project")).toHaveLength(1);
+  });
+
+  it("leaves other projects alone and does not mistake them for the inbox", () => {
+    const work = project("Work");
+    const inbox = ops.ensureInbox().result;
+
+    expect(inbox.id).not.toBe(work.id);
+    expect(store.get("project", work.id)?.isInbox).toBe(false);
+  });
+
+  it("adopts an unflagged top-level project called Inbox instead of adding a twin", () => {
+    // What the web app used to create for a brand-new account.
+    const legacy = ops.createProject({ name: "Inbox" }).result;
+    expect(legacy.isInbox).toBe(false);
+
+    const staged = ops.ensureInbox();
+
+    expect(staged.result.id).toBe(legacy.id);
+    expect(staged.result.isInbox).toBe(true);
+    expect(staged.ops).toHaveLength(1);
+    expect(store.all("project")).toHaveLength(1);
+  });
+
+  it("does not adopt a nested project that happens to be called Inbox", () => {
+    const parent = project("Work");
+    ops.createProject({ name: "Inbox", parentId: parent.id });
+
+    const inbox = ops.ensureInbox().result;
+
+    expect(inbox.parentId).toBeNull();
+    expect(store.all("project")).toHaveLength(3);
+  });
+
+  it("agrees on one inbox when two were created on different devices", () => {
+    // Two devices open a new account before either has synced. Nothing can
+    // stop both creating one, but both must then choose the same.
+    const other = new LightStore("other-device");
+    const theirs = new Operations(other).ensureInbox();
+    const mine = ops.ensureInbox();
+    store.applyRemote(theirs.ops);
+    other.applyRemote(mine.ops);
+
+    const chosenHere = ops.ensureInbox().result.id;
+    const chosenThere = new Operations(other).ensureInbox().result.id;
+    expect(chosenHere).toBe(chosenThere);
+  });
+
+  it("is what makes the inbox undeletable", () => {
+    const inbox = ops.ensureInbox().result;
+    expect(() => ops.deleteProject(inbox.id)).toThrow(/inbox/);
+  });
+});
+
+describe("createProject with isInbox", () => {
+  it("flags the project it creates", () => {
+    expect(ops.createProject({ name: "Inbox", isInbox: true }).result.isInbox).toBe(true);
+  });
+
+  it("refuses to make a second inbox", () => {
+    ops.createProject({ name: "Inbox", isInbox: true });
+    expect(() => ops.createProject({ name: "Another", isInbox: true })).toThrow(/already has an inbox/);
+    expect(store.all("project")).toHaveLength(1);
+  });
+
+  it("does not flag projects unless asked", () => {
+    expect(ops.createProject({ name: "Work" }).result.isInbox).toBe(false);
+  });
+});
+
+describe("createTaskFromText", () => {
+  const TODAY = "2026-11-11"; // a Wednesday
+  const quick = (text: string, extra: Partial<Parameters<Operations["createTaskFromText"]>[1]> = {}) =>
+    ops.createTaskFromText(text, { today: TODAY, timezone: "UTC", ...extra });
+
+  it("makes the task the plan describes, from one line", () => {
+    const home = ops.createProject({ name: "Home" }).result;
+    const { task, parse } = quick("pay rent tomorrow 9am p1 @errand #Home").result;
+
+    expect(task).toMatchObject({
+      content: "pay rent",
+      projectId: home.id,
+      priority: 1,
+      due: { date: "2026-11-12T09:00:00.000Z", hasTime: true, isRecurring: false, text: null },
+    });
+    expect(task.labelIds).toHaveLength(1);
+    expect(store.get("label", task.labelIds[0]!)?.name).toBe("errand");
+    expect(parse.tokens).toHaveLength(5);
+  });
+
+  it("reads a time in the zone it is given", () => {
+    ops.createProject({ name: "Home" });
+    const due = quick("call mum tomorrow 9am", { timezone: "America/New_York" }).result.task.due;
+    expect(due).toMatchObject({ date: "2026-11-12T14:00:00.000Z", hasTime: true, timezone: "America/New_York" });
+  });
+
+  it("leaves a date with no time all-day", () => {
+    const due = quick("call mum tomorrow").result.task.due;
+    expect(due).toEqual({ date: "2026-11-12", hasTime: false, text: null, timezone: null, isRecurring: false });
+  });
+
+  it("is the same task create_task would have made, field for field", () => {
+    const home = ops.createProject({ name: "Home" }).result;
+    const text = quick("pay rent tomorrow 9am p1 @errand #Home // landlord").result.task;
+    const fields = ops.createTask({
+      projectId: home.id,
+      content: "pay rent",
+      description: "landlord",
+      priority: 1,
+      labelNames: ["errand"],
+      due: { date: "2026-11-12T09:00:00.000Z", hasTime: true, text: null, timezone: "UTC", isRecurring: false },
+    }).result;
+
+    const { id: _a, createdAt: _b, order: _c, ...fromText } = text;
+    const { id: _d, createdAt: _e, order: _f, ...fromFields } = fields;
+    expect(fromText).toEqual(fromFields);
+  });
+
+  describe("where the task goes", () => {
+    it("files it in the inbox, making one in the same batch when there is none", () => {
+      const staged = quick("buy milk");
+      const inbox = store.all("project").filter((project) => project.isInbox);
+      expect(inbox).toHaveLength(1);
+      expect(staged.result.task.projectId).toBe(inbox[0]!.id);
+      // Both the inbox and the task have to be in what gets pushed, or the
+      // server is handed a task pointing at a project it has never heard of.
+      expect(staged.ops.map((op) => op.kind)).toEqual(["project", "task"]);
+    });
+
+    it("reuses the inbox it already has", () => {
+      const inbox = ops.ensureInbox().result;
+      const staged = quick("buy milk");
+      expect(staged.result.task.projectId).toBe(inbox.id);
+      expect(staged.ops.map((op) => op.kind)).toEqual(["task"]);
+    });
+
+    it("uses the default project when the text names none", () => {
+      const work = ops.createProject({ name: "Work" }).result;
+      expect(quick("write report", { defaultProjectId: work.id }).result.task.projectId).toBe(work.id);
+      expect(store.all("project").some((project) => project.isInbox)).toBe(false);
+    });
+
+    it("lets #Project beat the default", () => {
+      const work = ops.createProject({ name: "Work" }).result;
+      const home = ops.createProject({ name: "Home" }).result;
+      expect(quick("fix tap #home", { defaultProjectId: work.id }).result.task.projectId).toBe(home.id);
+    });
+
+    it("does not file anything under a project that does not exist", () => {
+      expect(() => quick("fix tap", { defaultProjectId: "nope" })).toThrow(/no project/);
+    });
+
+    it("does not treat the archived or the trophy cabinet as places to file", () => {
+      const old = ops.createProject({ name: "Old" }).result;
+      store.mutate("project", old.id, { isArchived: true });
+      const task = quick("fix tap #Old").result;
+      expect(task.task.projectId).not.toBe(old.id);
+      expect(task.task.content).toBe("fix tap #Old");
+    });
+  });
+
+  describe("labels", () => {
+    it("reuses an existing label whatever the case", () => {
+      ops.createLabel({ name: "errand" });
+      const task = quick("buy stamps @Errand").result.task;
+      expect(store.all("label")).toHaveLength(1);
+      expect(task.labelIds).toEqual([store.all("label")[0]!.id]);
+    });
+
+    it("does not make two of a label given twice", () => {
+      const task = quick("buy stamps @errand @Errand").result.task;
+      expect(task.labelIds).toHaveLength(1);
+      expect(store.all("label")).toHaveLength(1);
+    });
+  });
+
+  describe("repeats", () => {
+    it("makes a task that completing reschedules rather than finishes", () => {
+      const created = quick("standup every weekday 9am").result.task;
+      expect(created.due).toMatchObject({
+        date: "2026-11-11T09:00:00.000Z",
+        hasTime: true,
+        isRecurring: true,
+        text: "every weekday",
+      });
+
+      const done = ops.completeTask(created.id, TODAY).result;
+      expect(done.rescheduled).toBe(true);
+      expect(done.recurrenceUnderstood).toBe(true);
+      expect(done.task?.isCompleted).toBe(false);
+      expect(done.task?.due?.date).toBe("2026-11-12T09:00:00.000Z");
+    });
+
+    it("keeps the phrase exactly as typed, so the next occurrence can be read from it", () => {
+      const created = quick("floss every! 3 days").result.task;
+      expect(created.due?.text).toBe("every! 3 days");
+      const done = ops.completeTask(created.id, TODAY).result;
+      expect(done.rescheduled).toBe(true);
+      expect(done.task?.due?.date).toBe("2026-11-14");
+    });
+  });
+
+  describe("rewards still fire for a task made this way", () => {
+    it("files the reward when it is completed", () => {
+      const created = quick("ship the build").result.task;
+      ops.updateTask(created.id, { reward: "An hour in the sun" });
+      const done = ops.completeTask(created.id);
+
+      const cabinet = store.all("project").find((project) => project.isRewards);
+      expect(cabinet).toBeDefined();
+      expect(store.all("task").filter((task) => task.projectId === cabinet!.id).map((task) => task.content)).toEqual([
+        "An hour in the sun",
+      ]);
+      expect(done.ops.length).toBeGreaterThan(1);
+    });
+  });
+
+  describe("a repeat whose first time has already gone", () => {
+    it("starts at the next occurrence, the day completing it now would have produced", () => {
+      const early = quick("standup every weekday 9am", { now: "08:00" }).result.task;
+      expect(early.due?.date).toBe("2026-11-11T09:00:00.000Z");
+
+      const late = quick("standup every weekday 9am", { now: "14:00" }).result.task;
+      expect(late.due?.date).toBe("2026-11-12T09:00:00.000Z");
+    });
+
+    it("is refused when strict, because moving it is a call", () => {
+      expect(() => quick("standup every weekday 9am", { now: "14:00", strict: true })).toThrow(/already passed/);
+    });
+  });
+
+  describe("the date field overriding the text", () => {
+    it("replaces the date and the time and the repeat, all of them", () => {
+      const due = quick("standup every weekday 9am", { dueDate: "2026-12-01" }).result.task.due;
+      expect(due).toEqual({ date: "2026-12-01", hasTime: false, text: null, timezone: null, isRecurring: false });
+    });
+
+    it("still takes the shorthand out of the title", () => {
+      expect(quick("call mum tomorrow", { dueDate: "2026-12-01" }).result.task.content).toBe("call mum");
+    });
+  });
+
+  describe("taking a token back", () => {
+    it("leaves it in the title", () => {
+      const task = quick("book tomorrow flights", { ignore: ["tomorrow"] }).result.task;
+      expect(task.content).toBe("book tomorrow flights");
+      expect(task.due).toBeNull();
+    });
+  });
+
+  describe("when there is nothing to make a task from", () => {
+    it("refuses a line of only shorthand", () => {
+      expect(() => quick("p1 @focus")).toThrow(/title/);
+      expect(store.all("task")).toHaveLength(0);
+    });
+  });
+
+  describe("strict", () => {
+    it("proceeds on a line it read completely", () => {
+      expect(quick("pay rent tomorrow 9am p1", { strict: true }).result.task.content).toBe("pay rent");
+    });
+
+    it("throws, naming the text, on what a chip would have shown", () => {
+      expect.assertions(4);
+      try {
+        quick("plan the quarter next week", { strict: true });
+      } catch (error) {
+        expect(error).toBeInstanceOf(QuickAddRefusal);
+        expect((error as QuickAddRefusal).problems.map((problem) => problem.text)).toEqual(["next week"]);
+        expect((error as Error).message).toContain('"next week"');
+      }
+      // And the same line, lenient, is a task due next Monday.
+      expect(quick("plan the quarter next week").result.task.due?.date).toBe("2026-11-16");
+    });
+
+    it("stages nothing when it refuses: no task, no label, no inbox", () => {
+      expect(() => quick("ship it next friday @launch", { strict: true })).toThrow(QuickAddRefusal);
+      expect(store.all("task")).toHaveLength(0);
+      expect(store.all("label")).toHaveLength(0);
+      expect(store.all("project")).toHaveLength(0);
+    });
+
+    it("refuses a project it does not have, instead of filing under the inbox", () => {
+      expect(() => quick("fix tap #Garage", { strict: true })).toThrow(/#Garage/);
+    });
+  });
+
+  it("returns ops the store has already applied", () => {
+    const staged = quick("buy milk");
+    expect(store.get("task", staged.result.task.id)?.content).toBe("buy milk");
+    expect(staged.ops.length).toBeGreaterThan(0);
   });
 });

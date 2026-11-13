@@ -68,11 +68,21 @@ export function Sidebar({
     .all("project")
     .filter((project) => !project.isArchived)
     .filter((project) => rewardsEnabled || !project.isRewards);
+
+  // The inbox is a place you go, like Today, not a project you organise, so it
+  // gets its own entry above the views and is left out of the tree. Which one
+  // is by flag, never by name: a project merely called "Inbox" is not it.
+  const inbox = projects.find((project) => project.isInbox) ?? null;
   const byParent = new Map<string | null, Project[]>();
   for (const project of projects) {
-    const siblings = byParent.get(project.parentId) ?? [];
+    if (project === inbox) continue;
+    // Anything filed under the inbox rises to the top level instead, because
+    // the inbox no longer draws a branch to hang it from, and a project that
+    // cannot be reached from the sidebar is worse than one that moved up.
+    const parentId = inbox !== null && project.parentId === inbox.id ? null : project.parentId;
+    const siblings = byParent.get(parentId) ?? [];
     siblings.push(project);
-    byParent.set(project.parentId, siblings);
+    byParent.set(parentId, siblings);
   }
   for (const siblings of byParent.values()) {
     siblings.sort((a, b) => compareOrder(a.order, b.order));
@@ -102,7 +112,20 @@ export function Sidebar({
     );
   }
 
-  const views: { view: View; label: string; count: number }[] = [
+  const views: { view: View; label: string; count: number; selected?: boolean }[] = [
+    // First, above Today: capture lands here, and it is the list to empty. It
+    // is an ordinary project view underneath, so there is no new kind of view
+    // to route or remember.
+    ...(inbox === null
+      ? []
+      : [
+          {
+            view: { kind: "project", projectId: inbox.id } as View,
+            label: "Inbox",
+            count: openCount(inbox.id),
+            selected: view.kind === "project" && view.projectId === inbox.id,
+          },
+        ]),
     { view: { kind: "today" }, label: "Today", count: counts.today },
     // The planning surface, as opposed to the list: same tasks, laid out
     // against the hours they are meant to happen in.
@@ -122,7 +145,7 @@ export function Sidebar({
             <NavItem
               label={entry.label}
               count={entry.count}
-              selected={view.kind === entry.view.kind}
+              selected={entry.selected ?? view.kind === entry.view.kind}
               onClick={() => onSelect(entry.view)}
             />
           </li>

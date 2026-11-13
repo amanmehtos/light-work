@@ -261,3 +261,62 @@ export const COLORS = [
 export type Color = (typeof COLORS)[number];
 
 export const DEFAULT_COLOR: Color = "charcoal";
+
+/**
+ * What a colour looks like without hue: one of four greys, solid or hollow.
+ *
+ * `Project.color` and `Label.color` stay in the model — they are import
+ * fidelity, and Todoist's twenty names are already landing in them — but Light
+ * Week reserves hue for a single meaning, a plan that has slipped. So a colour
+ * is drawn as a mark instead. `tone` runs from 1 (darkest) to 4 (lightest) and
+ * `filled` says solid or outline; eight marks for twenty names means some
+ * share one, which is the cost of having no hue to spend. Someone who coloured
+ * one project charcoal and another yellow still sees two different dots.
+ *
+ * It lives beside {@link COLORS}, in the shared package, so the web and the
+ * phone cannot draw the same project differently.
+ */
+export interface ColorMark {
+  tone: 1 | 2 | 3 | 4;
+  filled: boolean;
+}
+
+/**
+ * Each name's place when the twenty are sorted by relative luminance of
+ * Todoist's own hex values and cut into eight runs. Within a tone the darker
+ * run is filled and the lighter one is hollow, so ink weight still follows
+ * darkness as closely as eight marks allow.
+ */
+const COLOR_MARKS: Record<Color, ColorMark> = {
+  berry_red: { tone: 1, filled: true },
+  grape: { tone: 1, filled: true },
+  violet: { tone: 1, filled: true },
+  red: { tone: 1, filled: false },
+  blue: { tone: 1, filled: false },
+  charcoal: { tone: 2, filled: true },
+  green: { tone: 2, filled: true },
+  teal: { tone: 2, filled: true },
+  magenta: { tone: 2, filled: false },
+  sky_blue: { tone: 2, filled: false },
+  salmon: { tone: 3, filled: true },
+  olive_green: { tone: 3, filled: true },
+  orange: { tone: 3, filled: true },
+  taupe: { tone: 3, filled: false },
+  lavender: { tone: 3, filled: false },
+  grey: { tone: 4, filled: true },
+  lime_green: { tone: 4, filled: true },
+  mint_green: { tone: 4, filled: true },
+  light_blue: { tone: 4, filled: false },
+  yellow: { tone: 4, filled: false },
+};
+
+/**
+ * The mark for a stored colour name.
+ *
+ * Takes a plain string because the field is one: an import or an agent can put
+ * anything there, and an unrecognised name gets the default colour's mark
+ * rather than no dot at all.
+ */
+export function colorMark(color: string): ColorMark {
+  return Object.hasOwn(COLOR_MARKS, color) ? COLOR_MARKS[color as Color] : COLOR_MARKS[DEFAULT_COLOR];
+}

@@ -24,6 +24,95 @@ public struct Operations: Sendable {
            clock: clock.next().encoded, node: clock.node)
     }
 
+    // MARK: - Creating
+
+    /// Why a task could not be made.
+    public enum CreateError: Error, Sendable, Equatable, LocalizedError {
+        case emptyTitle
+
+        public var errorDescription: String? {
+            switch self {
+            case .emptyTitle: return "A task needs a title."
+            }
+        }
+    }
+
+    /// Makes a task, at the end of its list.
+    ///
+    /// The Swift twin of `Operations.createTask` in `@light/client-sdk`, for a
+    /// phone that can finally add one. Deliberately no natural language: the
+    /// date rules live in the TypeScript parser, and a second implementation of
+    /// them in Swift would be a second place for them to drift — the rewards
+    /// rule already shows what that costs. So this takes what a person has
+    /// actually chosen: a title, a project, and the controls the editor has.
+    ///
+    /// `existing` is every task the caller knows about. The new one is placed
+    /// after the others in the same project at the top level, exactly as the
+    /// web does, using the same `Order` keys, so a task added here sorts where
+    /// the web would have put it.
+    ///
+    /// The op names every field, `null` where there is nothing — not only the
+    /// ones that have a value. `Task` here has no `dayOrder`, `isCollapsed` or
+    /// the assignee fields, and encoding it would simply omit those and every
+    /// optional left nil. The web reads a missing `parentId` as "not null",
+    /// which hides the task from its project list, so the patch is spelled out
+    /// the way `createTask` writes it.
+    public func create(
+        content: String,
+        projectId: String,
+        existing: [Task],
+        priority: Priority = .none,
+        now: Date = Date()
+    ) throws -> (task: Task, ops: [Op]) {
+        let title = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { throw CreateError.emptyTitle }
+
+        let siblings = existing.filter {
+            $0.projectId == projectId && $0.sectionId == nil && $0.parentId == nil
+        }
+        let created = Task(
+            id: LightID.new(now: now),
+            projectId: projectId,
+            sectionId: nil,
+            parentId: nil,
+            content: title,
+            description: "",
+            priority: priority,
+            order: Order.afterLast(siblings.map(\.order)),
+            due: nil,
+            deadline: nil,
+            duration: nil,
+            labelIds: [],
+            reward: nil,
+            isCompleted: false,
+            completedAt: nil,
+            createdAt: ISO8601DateFormatter.lightWeek.string(from: now))
+
+        let fields: JSONValue = .object([
+            "id": .string(created.id),
+            "projectId": .string(projectId),
+            "sectionId": .null,
+            "parentId": .null,
+            "content": .string(created.content),
+            "description": .string(""),
+            "priority": .integer(priority.rawValue),
+            "order": .string(created.order),
+            "dayOrder": .null,
+            "due": .null,
+            "deadline": .null,
+            "duration": .null,
+            "labelIds": .array([]),
+            "reward": .null,
+            "isCompleted": .bool(false),
+            "completedAt": .null,
+            "isCollapsed": .bool(false),
+            "assigneeId": .null,
+            "addedById": .null,
+            "createdAt": .string(created.createdAt),
+        ])
+        return (created, [op(kind: "task", id: created.id, fields: fields)])
+    }
+
     // MARK: - Editing
 
     /// A sparse edit. Each field is "leave it alone" unless it is set.

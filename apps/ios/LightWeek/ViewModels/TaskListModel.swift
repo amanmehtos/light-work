@@ -110,12 +110,25 @@ final class TaskListModel: ObservableObject {
         let hidden = hiddenProjectIds
         rows = all
             .filter { !hidden.contains($0.projectId) }
-            .sorted {
-                $0.priority.rawValue != $1.priority.rawValue
-                    ? $0.priority.rawValue < $1.priority.rawValue
-                    : $0.content.localizedCaseInsensitiveCompare($1.content) == .orderedAscending
-            }
+            .sorted(by: Self.inListOrder)
             .map { Row(task: $0, projectName: names[$0.projectId], focus: focus[$0.id] ?? FocusStats()) }
+    }
+
+    /// The order the web client shows the same tasks in: by `order`, the key the
+    /// person arranged them with there, compared as a plain string just as
+    /// `compareOrder` does. Priority and then title only break ties, which is
+    /// what the phone used to sort by outright — so a list rearranged in the
+    /// browser opened in a different order here.
+    ///
+    /// Each project numbers its own list, so across projects the keys say little;
+    /// the web's All view sorts the same way regardless, and agreeing with it
+    /// matters more than inventing a better cross-project rule on one side.
+    static func inListOrder(_ a: LightKit.Task, _ b: LightKit.Task) -> Bool {
+        if a.order != b.order { return a.order < b.order }
+        if a.priority.rawValue != b.priority.rawValue {
+            return a.priority.rawValue < b.priority.rawValue
+        }
+        return a.content.localizedCaseInsensitiveCompare(b.content) == .orderedAscending
     }
 
     /// The projects worth showing, which is all of them unless the trophies
@@ -162,6 +175,40 @@ final class TaskListModel: ObservableObject {
                 let staged = try operations.update(task, changes)
                 self.replace(staged.task)
                 return staged.ops
+            }
+        }
+    }
+
+    /// Where a task goes when nobody said: the inbox, else the first ordinary
+    /// project, else nowhere.
+    ///
+    /// "The inbox" is the project flagged `isInbox`, picked by lowest id when
+    /// two devices each made one before syncing — the same rule `ensureInbox`
+    /// uses on the web, so both clients agree which one is the real one. The
+    /// trophy cabinet and archived projects are never somewhere to file a task
+    /// by hand. Nowhere is possible: only the web makes an inbox, and an
+    /// account that has never been opened there has no project at all.
+    var defaultProject: Project? {
+        let usable = projects.filter { !$0.isArchived && !$0.isRewards }
+        if let inbox = usable.filter(\.isInbox).min(by: { $0.id < $1.id }) { return inbox }
+        return usable.min(by: { $0.order < $1.order })
+    }
+
+    /// Adds a task to the end of a project's list.
+    ///
+    /// On screen first and over the wire immediately after, like every other
+    /// write here. If the push fails the model reloads from the server, which
+    /// has never heard of this task, so the row disappears and the alert says
+    /// the write failed — rather than leaving a task on screen that exists
+    /// nowhere.
+    func create(content: String, projectId: String) {
+        _Concurrency.Task {
+            await write { operations in
+                let made = try operations.create(
+                    content: content, projectId: projectId, existing: self.all)
+                self.all.append(made.task)
+                self.rebuild()
+                return made.ops
             }
         }
     }

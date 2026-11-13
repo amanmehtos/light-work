@@ -98,6 +98,33 @@ html, body, #root { height: 100%; }
 .add-task-text { flex: 1; min-width: 14rem; }
 .add-task-date { flex: 0 0 auto; }
 
+/*
+ * What the line was read as, one chip each.
+ *
+ * A chip is a Diurnal badge made into a button, so it inherits the badge's
+ * border and type and adds only what a control needs. What it was read as is
+ * said by weight alone: plain for a reading with one meaning, outlined (the
+ * badge's own modifier, set in the component) for one that took a guess, and a
+ * line through it when the date field has overruled it.
+ */
+.add-task-chips {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.add-task-chips .chip { cursor: pointer; appearance: none; }
+.add-task-chips .chip:hover { border-color: var(--dn-ink); }
+.add-task-chips .chip:focus-visible { outline: 2px solid var(--dn-ink); outline-offset: 2px; }
+.add-task-chips .chip.struck { text-decoration: line-through; color: var(--dn-muted); }
+.add-task-chips .chip-x { margin-left: 0.125rem; color: var(--dn-muted); }
+
+.add-task-refused { flex: 1 0 100%; margin: 0; }
+
 /* --- tasks ---------------------------------------------------------- */
 
 /*

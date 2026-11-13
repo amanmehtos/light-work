@@ -10,7 +10,7 @@
  * can be rebuilt from a snapshot.
  */
 
-import { PROTOCOL_VERSION, type Cursor, type JsonObject, type Op } from "@light/core";
+import { ENTITY_KINDS, PROTOCOL_VERSION, type Cursor, type JsonObject, type Op } from "@light/core";
 import type { LightStore } from "./store.js";
 
 export interface QueueStorage {
@@ -26,6 +26,69 @@ export class MemoryQueueStorage implements QueueStorage {
   }
   async save(state: { ops: Op[]; cursor: Cursor }) {
     this.state = { ops: [...state.ops], cursor: state.cursor };
+  }
+}
+
+/** The slice of `localStorage` the queue needs, so a test can stand one in. */
+export interface KeyValueStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+/**
+ * Keeps the queue in `localStorage`, so an edit made offline survives a reload.
+ *
+ * Until this existed the web app ran on `MemoryQueueStorage` and every queued
+ * op died with the tab: the "N queued" badge was a promise the page could not
+ * keep across a refresh.
+ *
+ * `localStorage` is not dependable — private windows, blocked site data and a
+ * full quota all make it throw, sometimes on read and sometimes only on write
+ * — so every access is wrapped, and every save is also kept in memory. A
+ * browser that cannot persist therefore behaves exactly as the app did before
+ * this class: the queue lives as long as the page and no longer. Failing loudly
+ * was the alternative, and it was rejected because the person typing a task has
+ * done nothing wrong and cannot fix their browser's settings.
+ *
+ * The cursor is written alongside the ops because the two are one fact: "these
+ * are the ops the server has not seen, as of this point in its log". It is the
+ * caller's job (see `SyncClient.start`) not to trust that cursor against a
+ * store that did not survive the reload.
+ *
+ * The key is a parameter because a browser is shared between people: ops
+ * queued by one account must never be pushed into another's after a sign-out.
+ */
+export class WebQueueStorage implements QueueStorage {
+  private readonly memory = new MemoryQueueStorage();
+
+  constructor(
+    private readonly key = "light-week.queue",
+    private readonly area: () => KeyValueStorage = () => globalThis.localStorage,
+  ) {}
+
+  async load(): Promise<{ ops: Op[]; cursor: Cursor }> {
+    try {
+      const raw = this.area().getItem(this.key);
+      if (raw !== null) {
+        const parsed = JSON.parse(raw) as { ops?: unknown; cursor?: unknown };
+        if (Array.isArray(parsed.ops) && typeof parsed.cursor === "number") {
+          return { ops: parsed.ops as Op[], cursor: parsed.cursor };
+        }
+      }
+    } catch {
+      // Unreadable storage and unparseable contents get the same answer: start
+      // empty. A corrupt queue cannot be repaired, and the next save replaces it.
+    }
+    return this.memory.load();
+  }
+
+  async save(state: { ops: Op[]; cursor: Cursor }): Promise<void> {
+    await this.memory.save(state);
+    try {
+      this.area().setItem(this.key, JSON.stringify(state));
+    } catch {
+      // Memory already has it; see the class comment.
+    }
   }
 }
 
@@ -97,8 +160,13 @@ export class SyncClient {
     this.cursor = saved.cursor;
 
     // A cursor of zero means this client has never synced, so it bootstraps
-    // from a snapshot rather than replaying history it cannot have.
-    if (this.cursor === 0) await this.bootstrap();
+    // from a snapshot rather than replaying history it cannot have. So does an
+    // empty store with a cursor beyond zero: the queue can be persisted while
+    // the store, which lives in memory, is not, and pulling "since" a cursor
+    // into a store that holds none of what came before it would leave the
+    // account looking empty after every reload.
+    const cold = ENTITY_KINDS.every((kind) => this.store.count(kind) === 0);
+    if (this.cursor === 0 || cold) await this.bootstrap();
     await this.sync();
   }
 
@@ -131,6 +199,12 @@ export class SyncClient {
       entities: Partial<Record<string, JsonObject[]>>;
     };
     this.store.loadSnapshot(body.entities as never);
+    // The snapshot is the server's state, which by definition lacks whatever is
+    // still queued. Putting those ops back on top keeps an edit made offline
+    // visible after a reload rather than reappearing only once it has made the
+    // round trip. Applying one the server already has is harmless: the merge
+    // is idempotent.
+    if (this.queue.length > 0) this.store.applyRemote(this.queue);
     this.cursor = body.cursor;
     await this.persist();
   }
