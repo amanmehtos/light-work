@@ -79,6 +79,55 @@ export interface QuickAddInput {
   dueDate?: string | null;
 }
 
+/**
+ * Where "reschedule" can send a task. `null` is not a destination but the
+ * absence of one: it unschedules, which is why the type is a union with it
+ * rather than a fifth word.
+ */
+export type RescheduleTarget = "today" | "tomorrow" | "next-week" | "weekend" | null;
+
+/**
+ * The day a reschedule lands on, as `YYYY-MM-DD`, or null for "no date".
+ *
+ * Every client rounds through this one function — the web row menu, the phone's
+ * swipe, an agent — so "next week" cannot mean a different Monday on each.
+ * `today` is the caller's local calendar day, passed in because only the caller
+ * knows whose zone it is; it is never read off a clock here. The calendar
+ * arithmetic is on the string in UTC, which for a plain date is exact.
+ *
+ * The two vague words, pinned:
+ *
+ * - **next week** is the Monday strictly after today. On a Monday it is the
+ *   Monday a week away, never today. This is what the Quick Add parser already
+ *   reads "next week" as, so typing it and picking it agree.
+ * - **weekend** is the first Saturday or Sunday on or after today. Saturday and
+ *   Sunday are themselves the weekend, so asking for it then means today.
+ *   The alternative, "the next Saturday strictly after today", was rejected
+ *   because on a Sunday it would skip a weekend the person is standing in.
+ *   Swift's `Schedule.day(for:today:)` is the twin and shares this table.
+ */
+export function rescheduleDay(target: RescheduleTarget, today: string): string | null {
+  if (target === null) return null;
+  const shift = (days: number): string =>
+    new Date(new Date(`${today}T00:00:00.000Z`).getTime() + days * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+  const weekday = new Date(`${today}T00:00:00.000Z`).getUTCDay(); // 0 = Sunday
+
+  switch (target) {
+    case "today":
+      return today;
+    case "tomorrow":
+      return shift(1);
+    case "next-week":
+      return shift((1 - weekday + 7) % 7 || 7);
+    case "weekend":
+      // Saturday is 6 and Sunday is 0; from Monday (1) to Friday (5) the
+      // distance to Saturday is 6 - weekday.
+      return weekday === 0 ? today : shift(weekday === 6 ? 0 : 6 - weekday);
+  }
+}
+
 export class Operations {
   constructor(private readonly store: LightStore) {}
 
@@ -415,6 +464,43 @@ export class Operations {
     if (task === null) return { result: null, ops: [] };
     const op = this.store.mutate("task", id, changes);
     return { result: this.store.get("task", id), ops: [op] };
+  }
+
+  /**
+   * Moves a task to a day by name, or takes it off the calendar with `null`.
+   *
+   * The one-gesture edit behind the row menu and the swipe. It is `updateTask`
+   * with the day worked out in one shared place; see `rescheduleDay` for what
+   * "next week" and "weekend" mean.
+   *
+   * The day lands as an all-day date, the way dropping a block in the day view's
+   * rail does. A time of day is not carried over: keeping it would mean reading
+   * the old instant in some zone, and the web, the phone and a server-side agent
+   * are in different ones, so the three would disagree about the result. A
+   * repeat survives — its phrase and flag are kept, so a weekly task pushed to
+   * tomorrow is still weekly. `null` clears the due date and with it the repeat,
+   * which is what "no date" says.
+   *
+   * `today` is required, unlike `completeTask`'s optional day: that default is
+   * the UTC date, which is the wrong day for anyone near midnight, and this
+   * operation has nothing else to go on.
+   */
+  reschedule(id: string, target: RescheduleTarget, today: string): Staged<Task | null> {
+    const task = this.store.get("task", id);
+    if (task === null) return { result: null, ops: [] };
+
+    const day = rescheduleDay(target, today);
+    const due: Due | null =
+      day === null
+        ? null
+        : {
+            date: day,
+            hasTime: false,
+            text: task.due?.text ?? null,
+            timezone: task.due?.timezone ?? null,
+            isRecurring: task.due?.isRecurring ?? false,
+          };
+    return this.updateTask(id, { due });
   }
 
   /**

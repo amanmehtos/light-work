@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Op, Task } from "@light/core";
 import type { LightStore, Operations } from "@light/client-sdk";
-import { drag } from "diurnal-ui/motion.mjs";
+import { Draggable } from "./Draggable.js";
 import {
   SNAP_MINUTES,
   atDay,
@@ -81,59 +81,6 @@ export function layOut(
   flush();
 
   return placed;
-}
-
-/** A task in the rail, or a block in the grid: the same card, dragged. */
-function Draggable({
-  className,
-  style,
-  children,
-  onLand,
-  onOpen,
-}: {
-  className: string;
-  style?: React.CSSProperties;
-  children: React.ReactNode;
-  /** Decides what the pointer was over when it was let go. */
-  onLand: (event: PointerEvent) => Landing;
-  onOpen: () => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const landRef = useRef(onLand);
-  const openRef = useRef(onOpen);
-  landRef.current = onLand;
-  openRef.current = onOpen;
-
-  useEffect(() => {
-    const el = ref.current;
-    if (el === null) return;
-    drag(el, {
-      axis: "both",
-      threshold: 6,
-      onMove: ({ dx, dy }) => {
-        // 1:1 with the pointer, and lifted off the page while it is in hand.
-        el.style.transform = `translate(${dx}px, ${dy}px)`;
-        el.style.setProperty("--dn-elev", "24px");
-        el.style.zIndex = "5";
-      },
-      onEnd: ({ e }) => {
-        el.style.transform = "";
-        el.style.removeProperty("--dn-elev");
-        el.style.zIndex = "";
-        landRef.current(e);
-      },
-      onTap: () => openRef.current(),
-    });
-    // `drag` has no teardown, and the element dies with its listeners, so
-    // there is nothing to return. Mount once: re-registering on every render
-    // would stack handlers on the same node.
-  }, []);
-
-  return (
-    <div ref={ref} className={`dn-card day-drag ${className}`} style={style}>
-      {children}
-    </div>
-  );
 }
 
 export function Day({

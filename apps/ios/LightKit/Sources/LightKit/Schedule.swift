@@ -86,6 +86,41 @@ public enum Schedule {
         return localDay(moved, calendar: calendar)
     }
 
+    /// The day a reschedule lands on, as `YYYY-MM-DD`.
+    ///
+    /// The Swift twin of `rescheduleDay` in `packages/client-sdk/src/operations.ts`,
+    /// and held to the same table of answers by `RescheduleTests`. `today` is
+    /// the caller's local calendar day. The arithmetic is on the date itself, in
+    /// a fixed Gregorian UTC calendar, never the device's: a locale whose week
+    /// starts on Sunday, or a zone near midnight, must not be able to move
+    /// "next week" to a different day than the web's.
+    ///
+    /// **Next week** is the Monday strictly after today — never today, even on
+    /// a Monday. **Weekend** is the first Saturday or Sunday on or after today,
+    /// so asking for it on a weekend means today.
+    public static func day(for target: Reschedule, today: String) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        guard let start = calendar.date(from: components(of: today)) else { return today }
+
+        // 0 = Sunday, as `Date.getUTCDay` has it.
+        let weekday = calendar.component(.weekday, from: start) - 1
+
+        let toMonday = (1 - weekday + 7) % 7
+        let offset: Int
+        switch target {
+        case .today: offset = 0
+        case .tomorrow: offset = 1
+        // Zero means it is Monday already, and next week is then a week away.
+        case .nextWeek: offset = toMonday == 0 ? 7 : toMonday
+        case .weekend: offset = weekday == 0 || weekday == 6 ? 0 : 6 - weekday
+        }
+        guard let moved = calendar.date(byAdding: .day, value: offset, to: start) else { return today }
+
+        let parts = calendar.dateComponents([.year, .month, .day], from: moved)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 1970, parts.month ?? 1, parts.day ?? 1)
+    }
+
     /// How long a block should be, in minutes.
     ///
     /// A task with no estimate still has to be big enough to grab, and one
@@ -163,4 +198,26 @@ extension ISO8601DateFormatter {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+}
+
+/// Where "reschedule" can send a task. "No date" is not a case: it is the
+/// absence of one, spelled `nil` where a `Reschedule?` is taken.
+///
+/// The raw values are the strings the web and the agent tool use, so a name
+/// means the same thing in all three places.
+public enum Reschedule: String, CaseIterable, Sendable {
+    case today
+    case tomorrow
+    case nextWeek = "next-week"
+    case weekend
+
+    /// What a menu calls it.
+    public var title: String {
+        switch self {
+        case .today: return "Today"
+        case .tomorrow: return "Tomorrow"
+        case .weekend: return "This weekend"
+        case .nextWeek: return "Next week"
+        }
+    }
 }

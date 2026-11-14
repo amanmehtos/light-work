@@ -295,6 +295,33 @@ describe("complete_task", () => {
   });
 });
 
+describe("reschedule_task", () => {
+  // TODAY is a Saturday, so the weekend is today and next week is the 26th.
+  it.each([
+    ["today", "2026-10-24"],
+    ["tomorrow", "2026-10-25"],
+    ["next-week", "2026-10-26"],
+    ["weekend", "2026-10-24"],
+  ])("moves a task to %s", async (when, date) => {
+    const { task } = await seed();
+    const response = await call("reschedule_task", { taskId: task.id, when });
+    expect(response.isError).toBeUndefined();
+    expect(response.structuredContent.task.due.date).toBe(date);
+  });
+
+  it("clears the date with none", async () => {
+    const { task } = await seed();
+    const response = await call("reschedule_task", { taskId: task.id, when: "none" });
+    // `formatTask` leaves the field out when there is no date.
+    expect(response.structuredContent.task.due).toBeUndefined();
+  });
+
+  it("says when there is no such task", async () => {
+    const response = await call("reschedule_task", { taskId: "missing", when: "today" });
+    expect(response.isError).toBe(true);
+  });
+});
+
 describe("list_tasks", () => {
   it("filters by project, label and priority", async () => {
     const { project, task } = await seed();

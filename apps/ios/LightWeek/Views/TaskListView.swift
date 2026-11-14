@@ -22,6 +22,8 @@ struct TaskListView: View {
     @State private var surface: Surface = .list
     @State private var day = Schedule.localDay(Date())
     @State private var editing: LightKit.Task?
+    @State private var rescheduling: LightKit.Task?
+    @State private var deleting: LightKit.Task?
     @State private var showingPreferences = false
     @State private var handoffError: String?
 
@@ -116,17 +118,124 @@ struct TaskListView: View {
                 TaskRowView(
                     row: row,
                     labels: model.labelNames(for: row.task),
-                    onToggle: {
-                        row.task.isCompleted ? model.reopen(row.task) : model.complete(row.task)
-                    },
+                    onToggle: { toggle(row.task) },
                     onEdit: { editing = row.task },
                     onFocus: { focus(row) })
                     .listRowSeparatorTint(Color.dnLine)
                     .listRowBackground(Color.clear)
+                    // Leading is the one you do most: finishing. It goes through
+                    // `toggle`, which is `Operations.complete` — the rule that
+                    // files a task's reward — and not a write of `isCompleted`
+                    // of its own, or a swipe would finish a task and quietly
+                    // earn nothing.
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        Button { toggle(row.task) } label: {
+                            Label(row.task.isCompleted ? "Reopen" : "Complete",
+                                  systemImage: row.task.isCompleted ? "arrow.uturn.backward" : "checkmark")
+                        }
+                        // Tinted with ink: the system would otherwise paint the
+                        // action in its own colour, and this app has no hue.
+                        .tint(Color.dnInk)
+                    }
+                    // Not a full swipe: a delete that one long drag can reach
+                    // by accident is how a task with subtasks goes unnoticed.
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        // No `.destructive` role anywhere here: the system paints
+                        // that red, and red is spoken for by overdue.
+                        Button { deleting = row.task } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .tint(Color.dnInk)
+
+                        Button { rescheduling = row.task } label: {
+                            Label("Reschedule", systemImage: "calendar")
+                        }
+                        .tint(Color.dnInk2)
+                    }
+                    .contextMenu { menu(for: row.task) }
             }
             .listStyle(.plain)
             .refreshable { await model.load() }
+            .confirmationDialog(
+                "Reschedule", isPresented: Binding(
+                    get: { rescheduling != nil },
+                    set: { shown in if !shown { rescheduling = nil } }),
+                titleVisibility: .visible, presenting: rescheduling
+            ) { task in
+                ForEach(Reschedule.allCases, id: \.self) { target in
+                    Button(target.title) { model.reschedule(task, to: target) }
+                }
+                Button("No date") { model.reschedule(task, to: nil) }
+            } message: { task in
+                Text(task.content)
+            }
+            .confirmationDialog(
+                deleting.map { "Delete “\($0.content)”?" } ?? "Delete", isPresented: Binding(
+                    get: { deleting != nil },
+                    set: { shown in if !shown { deleting = nil } }),
+                titleVisibility: .visible, presenting: deleting
+            ) { task in
+                Button("Delete") { model.delete(task) }
+            } message: { task in
+                let count = model.subtaskCount(of: task)
+                Text(count == 0
+                     ? "This can’t be undone."
+                     : "Its \(count) subtask\(count == 1 ? "" : "s") will be deleted too. This can’t be undone.")
+            }
         }
+    }
+
+    /// Done and not done, from one place: the swipe and the box on the row both
+    /// come through here, so neither can finish a task without the reward.
+    private func toggle(_ task: LightKit.Task) {
+        task.isCompleted ? model.reopen(task) : model.complete(task)
+    }
+
+    /// What a long press on a row offers: everything the swipe does and the
+    /// edits that would not fit on it.
+    @ViewBuilder
+    private func menu(for task: LightKit.Task) -> some View {
+        Menu {
+            ForEach(Priority.allCases, id: \.self) { priority in
+                Button {
+                    model.setPriority(task, priority)
+                } label: {
+                    if priority == task.priority {
+                        Label(Self.priorityTitle(priority), systemImage: "checkmark")
+                    } else {
+                        Text(Self.priorityTitle(priority))
+                    }
+                }
+            }
+        } label: {
+            Label("Priority", systemImage: "flag")
+        }
+
+        Menu {
+            ForEach(Reschedule.allCases, id: \.self) { target in
+                Button(target.title) { model.reschedule(task, to: target) }
+            }
+            Button("No date") { model.reschedule(task, to: nil) }
+        } label: {
+            Label("Reschedule", systemImage: "calendar")
+        }
+
+        Menu {
+            ForEach(model.movableProjects.filter { $0.id != task.projectId }) { project in
+                Button(project.name) { model.move(task, to: project) }
+            }
+        } label: {
+            Label("Move to project", systemImage: "folder")
+        }
+
+        Button { deleting = task } label: {
+            Label("Delete", systemImage: "trash")
+        }
+    }
+
+    private static func priorityTitle(_ priority: Priority) -> String {
+        let name = ["", "urgent", "high", "medium", "none"][priority.rawValue]
+        return "p\(priority.rawValue) \(name)"
     }
 
     private func message(title: String, detail: String) -> some View {

@@ -153,6 +153,61 @@ html, body, #root { height: 100%; }
   overflow: hidden;
 }
 
+/* A selected row sits higher. A class, not an inline style: a drag in hand
+   sets and then clears --dn-elev on the element itself. */
+.task.selected { --dn-elev: 18px; }
+
+/* The body is a div now, so the title takes over what the body-as-button did. */
+.task .row-title {
+  display: block; min-width: 0; max-width: 100%;
+  font: inherit; color: inherit; text-align: left;
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+.task .row-title:focus-visible { outline: 2px solid var(--dn-focus); outline-offset: 2px; }
+
+/*
+ * The menus on a row's date and priority.
+ *
+ * The trigger is a badge that is a button, so it takes the badge's own look and
+ * only gains the things a button needs. The list floats over the rows below
+ * it; it is a card, so it gets the same light and shadow as everything else,
+ * and no colour of its own.
+ */
+.row-menu { position: relative; display: inline-flex; }
+.row-chip { font-family: inherit; cursor: pointer; appearance: none; }
+.row-chip:hover { border-color: var(--dn-ink); }
+.row-chip:focus-visible { outline: 2px solid var(--dn-focus); outline-offset: 2px; }
+
+/* "No date" and "no priority" have nothing to show, so the way in is quiet:
+   it appears when the row is looked at. It stays in the tab order the whole
+   time, and on a touch screen, which has no hover, it is simply always there. */
+.row-chip--add { color: var(--dn-muted); border-style: dashed; opacity: 0; }
+.task:hover .row-chip--add,
+.task:focus-within .row-chip--add,
+.task.selected .row-chip--add,
+.row-menu:has([aria-expanded="true"]) .row-chip--add { opacity: 1; }
+@media (hover: none) { .row-chip--add { opacity: 1; } }
+
+.row-menu__list {
+  position: absolute; z-index: 20; top: calc(100% + 0.25rem); left: 0;
+  --dn-elev: 18px;
+  display: grid; gap: 2px; min-width: 11rem; padding: 0.375rem;
+}
+.row-menu__item { justify-content: flex-start; width: 100%; }
+.row-menu__item[aria-checked="true"]::before { content: "•"; margin-right: 0.375rem; }
+.row-menu__pick { display: grid; gap: 0.25rem; padding: 0.375rem 0.25rem 0.125rem; }
+
+/* A row that can be dragged. The grip is the part a finger takes hold of, so it
+   alone refuses to scroll; the rest of the row keeps scrolling the page. */
+.row-draggable { cursor: grab; }
+.row-draggable .dn-row__body, .row-draggable .row-title { cursor: pointer; }
+.row-grip {
+  align-self: center; flex: 0 0 auto;
+  color: var(--dn-muted); letter-spacing: -0.2em; line-height: 1;
+  padding: 0.5rem 0.25rem; margin: -0.5rem -0.25rem;
+  touch-action: none; cursor: grab; user-select: none;
+}
+
 /* The checkbox is a bare control here, with its label on the row body. */
 .task .dn-check { margin-top: 0.125rem; }
 
@@ -334,3 +389,41 @@ html, body, #root { height: 100%; }
  * stays; only the casing is given back.
  */
 .task .reward { font-variant: normal; text-transform: none; letter-spacing: 0; }
+
+/*
+ * The reorder arrows, out of the way until they are wanted.
+ *
+ * Dragging is how a row is moved now, and two permanent buttons beside it are
+ * the same act offered twice — which is the clutter this app is meant not to
+ * have. They cannot simply go: a list that can only be reordered by dragging
+ * cannot be reordered by a keyboard or a screen reader at all.
+ *
+ * So they fade in on hover and on focus. `opacity`, not `visibility` or
+ * `display`: those two take an element out of the tab order, which would
+ * remove the very people the buttons exist for. `:focus-within` on the row is
+ * what makes tabbing to an invisible button reveal it, and `pointer-events`
+ * keeps an unseen button from catching a stray click meanwhile.
+ *
+ * The space is reserved either way, so a row does not change width under the
+ * cursor as it passes along a list.
+ */
+.task .reorder {
+  opacity: 0;
+  pointer-events: none;
+  /* Not `--dn-ease`, which is 1.6s: that is the pace the light moves at, and
+     it is right for a shadow and wrong for an affordance. At that speed the
+     arrows would still be arriving after the cursor had moved on. The library
+     uses a literal fast easing for the same reason on its own controls. */
+  transition: opacity 0.12s ease;
+}
+.task:hover .reorder,
+.task:focus-within .reorder {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* A touchscreen has no hover to reveal them with, and the drag handle is a
+   deliberate, small target there. Leave them out in the open. */
+@media (hover: none) {
+  .task .reorder { opacity: 1; pointer-events: auto; }
+}

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { compareOrder } from "@light/core";
-import { Operations, QuickAddRefusal } from "../src/operations.js";
+import { compareOrder, type Due } from "@light/core";
+import { Operations, QuickAddRefusal, rescheduleDay, type RescheduleTarget } from "../src/operations.js";
 import { LightStore } from "../src/store.js";
 
 let store: LightStore;
@@ -717,5 +717,130 @@ describe("createTaskFromText", () => {
     const staged = quick("buy milk");
     expect(store.get("task", staged.result.task.id)?.content).toBe("buy milk");
     expect(staged.ops.length).toBeGreaterThan(0);
+  });
+});
+
+describe("reschedule", () => {
+  /**
+   * One row per day of a week, and the answers every client must give.
+   *
+   * This table is copied, row for row, into `RescheduleTests` in
+   * `apps/ios/LightKit/Tests/LightKitTests/OperationsTests.swift`. It is the
+   * thing that stops "next week" meaning a different Monday on the phone: change
+   * a row here and the Swift test fails until it is changed there too.
+   *
+   * 2026-11-09 is a Monday.
+   */
+  const week: [name: string, today: string, tomorrow: string, nextWeek: string, weekend: string][] = [
+    ["Monday", "2026-11-09", "2026-11-10", "2026-11-16", "2026-11-14"],
+    ["Tuesday", "2026-11-10", "2026-11-11", "2026-11-16", "2026-11-14"],
+    ["Wednesday", "2026-11-11", "2026-11-12", "2026-11-16", "2026-11-14"],
+    ["Thursday", "2026-11-12", "2026-11-13", "2026-11-16", "2026-11-14"],
+    ["Friday", "2026-11-13", "2026-11-14", "2026-11-16", "2026-11-14"],
+    // The weekend is already here, so it means today.
+    ["Saturday", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-14"],
+    ["Sunday", "2026-11-15", "2026-11-16", "2026-11-16", "2026-11-15"],
+    // Across a year end, and across 29 February.
+    ["Thursday, New Year's Eve", "2026-12-31", "2027-01-01", "2027-01-04", "2027-01-02"],
+    ["Monday, the day before a leap day", "2028-02-28", "2028-02-29", "2028-03-06", "2028-03-04"],
+  ];
+
+  it.each(week)("%s: the days each word means", (_name, today, tomorrow, nextWeek, weekend) => {
+    expect(rescheduleDay("today", today)).toBe(today);
+    expect(rescheduleDay("tomorrow", today)).toBe(tomorrow);
+    expect(rescheduleDay("next-week", today)).toBe(nextWeek);
+    expect(rescheduleDay("weekend", today)).toBe(weekend);
+    expect(rescheduleDay(null, today)).toBeNull();
+  });
+
+  it("never reads next week as today, even on a Monday", () => {
+    expect(rescheduleDay("next-week", "2026-11-09")).toBe("2026-11-16");
+  });
+
+  it("agrees with what the Quick Add parser reads next week as", () => {
+    // Typing "next week" and picking it from the menu must land on one day.
+    for (const [, today, , nextWeek] of week) {
+      const parsed = ops.createTaskFromText("water the plants next week", {
+        today,
+        defaultProjectId: project().id,
+      }).result.task;
+      expect(parsed.due?.date).toBe(nextWeek);
+    }
+  });
+
+  function taskDue(due: Due | null) {
+    return ops.createTask({ projectId: project().id, content: "ring the vet", due }).result;
+  }
+
+  it.each<[RescheduleTarget, string | null]>([
+    ["today", "2026-11-13"],
+    ["tomorrow", "2026-11-14"],
+    ["next-week", "2026-11-16"],
+    ["weekend", "2026-11-14"],
+    [null, null],
+  ])("writes %s to the task as an all-day date", (target, day) => {
+    const task = taskDue({
+      date: "2026-12-01",
+      hasTime: false,
+      text: null,
+      timezone: null,
+      isRecurring: false,
+    });
+    const staged = ops.reschedule(task.id, target, "2026-11-13");
+
+    expect(staged.ops).toHaveLength(1);
+    if (day === null) {
+      expect(staged.result?.due).toBeNull();
+    } else {
+      expect(staged.result?.due).toMatchObject({ date: day, hasTime: false });
+    }
+    expect(store.get("task", task.id)?.due?.date ?? null).toBe(day);
+  });
+
+  it("schedules a task that had no date", () => {
+    const task = taskDue(null);
+    expect(ops.reschedule(task.id, "tomorrow", "2026-11-13").result?.due?.date).toBe("2026-11-14");
+  });
+
+  it("drops the time of day and says so by being all-day", () => {
+    const task = taskDue({
+      date: "2026-11-13T09:30:00.000Z",
+      hasTime: true,
+      text: null,
+      timezone: "Europe/London",
+      isRecurring: false,
+    });
+    const due = ops.reschedule(task.id, "tomorrow", "2026-11-13").result?.due;
+    expect(due?.hasTime).toBe(false);
+    expect(due?.date).toBe("2026-11-14");
+  });
+
+  it("keeps a repeat repeating, and 'no date' ends it", () => {
+    const task = taskDue({
+      date: "2026-11-09",
+      hasTime: false,
+      text: "every monday",
+      timezone: null,
+      isRecurring: true,
+    });
+    const moved = ops.reschedule(task.id, "next-week", "2026-11-13").result?.due;
+    expect(moved).toMatchObject({ date: "2026-11-16", text: "every monday", isRecurring: true });
+
+    expect(ops.reschedule(task.id, null, "2026-11-13").result?.due).toBeNull();
+  });
+
+  it("changes nothing else about the task", () => {
+    const task = ops.createTask({
+      projectId: project().id,
+      content: "ring the vet",
+      priority: 2,
+      reward: "a long walk",
+    }).result;
+    const after = ops.reschedule(task.id, "today", "2026-11-13").result;
+    expect(after).toMatchObject({ content: "ring the vet", priority: 2, reward: "a long walk" });
+  });
+
+  it("says nothing for a task that is not there", () => {
+    expect(ops.reschedule("missing", "today", "2026-11-13")).toEqual({ result: null, ops: [] });
   });
 });

@@ -75,7 +75,12 @@ export function Sidebar({
   const inbox = projects.find((project) => project.isInbox) ?? null;
   const byParent = new Map<string | null, Project[]>();
   for (const project of projects) {
-    if (project === inbox) continue;
+    // Every flagged inbox, not just the one the nav entry chose. Duplicates
+    // should not exist — `ensureInbox` keeps one — but a cold-start race on
+    // two devices can still mint a second, and when that happens the sidebar
+    // showing "Inbox" twice is how the user finds out. One entry at the top,
+    // and the strays stay out of the tree rather than advertising the bug.
+    if (project.isInbox) continue;
     // Anything filed under the inbox rises to the top level instead, because
     // the inbox no longer draws a branch to hang it from, and a project that
     // cannot be reached from the sidebar is worse than one that moved up.

@@ -12,7 +12,7 @@
  */
 
 import { compareOrder, type Due, type Priority, type Task } from "@light/core";
-import { meaning, parseRecurrence, QuickAddRefusal } from "@light/client-sdk";
+import { meaning, parseRecurrence, QuickAddRefusal, type RescheduleTarget } from "@light/client-sdk";
 import { z } from "zod";
 import type { ToolContext } from "./context.js";
 import { failure, formatProject, formatTask, humanDuration, projectPath, result } from "./format.js";
@@ -511,6 +511,31 @@ export function buildTools(): ToolDefinition[] {
         const staged = context.ops.updateTask(task.id, changes);
         await context.flush(staged.ops);
         return result({ task: staged.result === null ? null : formatTask(context, staged.result) });
+      },
+    },
+
+    {
+      name: "reschedule_task",
+      title: "Reschedule a task",
+      description:
+        "Moves a task to today, tomorrow, next week or the weekend, or clears its date with " +
+        '"none". "next-week" is the Monday after today (never today itself); "weekend" is the ' +
+        "first Saturday or Sunday on or after today. The task lands as an all-day date, so a " +
+        "time of day is dropped; a repeat is kept. Use update_task for a specific date or time.",
+      readOnly: false,
+      inputSchema: {
+        taskId: z.string(),
+        when: z.enum(["today", "tomorrow", "next-week", "weekend", "none"]),
+      },
+      handler: async (args, context) => {
+        const staged = context.ops.reschedule(
+          String(args.taskId),
+          args.when === "none" ? null : (args.when as Exclude<RescheduleTarget, null>),
+          context.today(),
+        );
+        if (staged.result === null) return failure(`No task with id ${String(args.taskId)}.`);
+        await context.flush(staged.ops);
+        return result({ task: formatTask(context, staged.result) });
       },
     },
 

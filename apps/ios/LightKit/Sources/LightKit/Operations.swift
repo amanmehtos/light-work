@@ -24,6 +24,13 @@ public struct Operations: Sendable {
            clock: clock.next().encoded, node: clock.node)
     }
 
+    /// A tombstone. It carries no fields: a delete is the absence of a row, and
+    /// the merge rule reads only its clock.
+    private func tombstone(kind: String, id: String) -> Op {
+        Op(kind: kind, entityId: id, type: "delete", fields: nil,
+           clock: clock.next().encoded, node: clock.node)
+    }
+
     // MARK: - Creating
 
     /// Why a task could not be made.
@@ -199,6 +206,138 @@ public struct Operations: Sendable {
         }
 
         return (updated, [op(kind: "task", id: task.id, fields: .object(fields))])
+    }
+
+    /// Moves a task to a day by name, or off the calendar with `nil`.
+    ///
+    /// The one-gesture edit behind the swipe and the context menu, and the Swift
+    /// twin of `Operations.reschedule` in `@light/client-sdk`. The day comes from
+    /// `Schedule.day(for:today:)`, so "next week" is the same Monday here as on
+    /// the web and for an agent.
+    ///
+    /// It goes through `update`, so the patch is sparse — only `due` is written.
+    /// The day lands all-day: a time of day is dropped, as it is on the web, and
+    /// a repeat's phrase and flag are kept so a weekly task pushed to tomorrow
+    /// is still weekly. `nil` clears the date and with it the repeat.
+    public func reschedule(
+        _ task: Task, to target: Reschedule?, today: String
+    ) throws -> (task: Task, ops: [Op]) {
+        guard let target else {
+            return try update(task, .init(due: .some(nil)))
+        }
+        let due = Due(date: Schedule.day(for: target, today: today),
+                      hasTime: false,
+                      text: task.due?.text,
+                      timezone: task.due?.timezone,
+                      isRecurring: task.due?.isRecurring ?? false)
+        return try update(task, .init(due: .some(due)))
+    }
+
+    // MARK: - Deleting
+
+    /// What deleting a task took with it.
+    public struct Deletion: Sendable {
+        /// Every id that went, subtasks first and the task itself last.
+        public var deleted: [String]
+        public var ops: [Op]
+    }
+
+    /// Deletes a task and its subtasks, however deep.
+    ///
+    /// The same rule as `Operations.deleteTask` in `@light/client-sdk`, and for
+    /// the same reason: a delete is a tombstone on one row, nothing cascades in
+    /// storage, so every subtask needs a tombstone of its own or it outlives
+    /// its parent pointing at an id that is gone. Depth first, children before
+    /// the parent.
+    ///
+    /// `tasks` is every task the caller knows about, completed ones included —
+    /// a finished subtask is still a subtask.
+    public func delete(_ task: Task, among tasks: [Task]) -> Deletion {
+        let deleted = Self.subtaskIds(of: task, among: tasks) + [task.id]
+        return Deletion(deleted: deleted, ops: deleted.map { tombstone(kind: "task", id: $0) })
+    }
+
+    /// Every task beneath this one, at any depth, deepest first — the order a
+    /// delete has to go in. Public so a confirmation can say how many are about
+    /// to go using the very walk that will take them.
+    public static func subtaskIds(of task: Task, among tasks: [Task]) -> [String] {
+        var found: [String] = []
+        // A guard against a parent cycle in bad data, which would otherwise
+        // recurse for ever.
+        var seen: Set<String> = [task.id]
+
+        func collect(_ parentId: String) {
+            for child in tasks where child.parentId == parentId && !seen.contains(child.id) {
+                seen.insert(child.id)
+                collect(child.id)
+                found.append(child.id)
+            }
+        }
+        collect(task.id)
+        return found
+    }
+
+    // MARK: - Moving
+
+    /// What moving a task changed.
+    public struct Move: Sendable {
+        /// The moved task first, then each of its subtasks, as they now stand.
+        public var tasks: [Task]
+        public var ops: [Op]
+    }
+
+    /// Moves a task to another project, last in that project's top level.
+    ///
+    /// Stricter than `moveTask` in `@light/client-sdk`, which leaves a task's
+    /// section and parent alone: a section belongs to one project and a
+    /// subtask's parent stays behind in the old one, so keeping either would
+    /// leave the task pointing at something in a project it no longer lives in,
+    /// and it would vanish from both lists. So the task lands outside any
+    /// section and without a parent, and its subtasks come with it — they get
+    /// the new project and keep their parent, which is now beside them. The
+    /// web's version of this is the editor's project field; making that agree is
+    /// a structural change for the sections and subtasks phase.
+    ///
+    /// Moving to the project it is already in writes nothing.
+    public func move(_ task: Task, to projectId: String, among tasks: [Task]) -> Move {
+        guard task.projectId != projectId else { return Move(tasks: [task], ops: []) }
+
+        let siblings = tasks.filter {
+            $0.projectId == projectId && $0.sectionId == nil && $0.parentId == nil
+        }
+        var moved = task
+        moved.projectId = projectId
+        moved.sectionId = nil
+        moved.parentId = nil
+        moved.order = Order.afterLast(siblings.map(\.order))
+
+        var changed = [moved]
+        var ops = [op(kind: "task", id: task.id, fields: .object([
+            "projectId": .string(projectId),
+            "sectionId": .null,
+            "parentId": .null,
+            "order": .string(moved.order),
+        ]))]
+
+        var seen: Set<String> = [task.id]
+        func follow(_ parentId: String) {
+            for child in tasks where child.parentId == parentId && !seen.contains(child.id) {
+                seen.insert(child.id)
+                var carried = child
+                carried.projectId = projectId
+                // A section belongs to the project it was made in.
+                carried.sectionId = nil
+                changed.append(carried)
+                ops.append(op(kind: "task", id: child.id, fields: .object([
+                    "projectId": .string(projectId),
+                    "sectionId": .null,
+                ])))
+                follow(child.id)
+            }
+        }
+        follow(task.id)
+
+        return Move(tasks: changed, ops: ops)
     }
 
     // MARK: - Finishing

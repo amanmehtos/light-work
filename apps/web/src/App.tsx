@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { compareOrder, type Task } from "@light/core";
+import { compareOrder, type Priority, type Task } from "@light/core";
+import type { RescheduleTarget } from "@light/client-sdk";
 import { loadSession, logout, readConsentRequest, type StoredSession } from "./auth.js";
 import { Sky, ThemeToggle, describeLight, useDiurnal, useScrolled } from "./diurnal.js";
 import { useLightWeek } from "./store-hook.js";
@@ -11,7 +12,8 @@ import { SignIn } from "./components/SignIn.js";
 import { Sidebar, type View } from "./components/Sidebar.js";
 import { TaskEditor } from "./components/TaskEditor.js";
 import { TaskRow } from "./components/TaskRow.js";
-import { dueDay, localDay } from "./schedule.js";
+import { planReorder, rowUnder } from "./reorder.js";
+import { atDay, dueDay, localDay } from "./schedule.js";
 import { foldSubtasks } from "./subtasks.js";
 
 function todayISO(): string {
@@ -248,6 +250,41 @@ function Workspace({
     }
   }
 
+  // The one-gesture edits behind the row's menus. Each is `Operations` and one
+  // commit, so a pick never opens the editor — and each goes through the same
+  // methods an agent calls, which is what keeps "next week" one day everywhere.
+  function reschedule(task: Task, target: RescheduleTarget) {
+    commit(ops.reschedule(task.id, target, today).ops);
+  }
+
+  function pickDay(task: Task, day: string) {
+    // `atDay` rather than a bare date, so a repeat's phrase survives the pick.
+    commit(ops.updateTask(task.id, { due: atDay(day, task.due) }).ops);
+  }
+
+  function setPriority(task: Task, priority: Priority) {
+    if (priority === task.priority) return;
+    commit(ops.updateTask(task.id, { priority }).ops);
+  }
+
+  // Dragging a row only means something in a list that is ordered by `order`.
+  // Upcoming is ordered by date and Completed by when each was finished, so a
+  // dropped row would have nowhere to be; they keep the buttons alone.
+  const reorderable = view.kind === "project" || view.kind === "today" || view.kind === "all";
+
+  function drop(task: Task, event: PointerEvent) {
+    const over = rowUnder(event.clientX, event.clientY);
+    if (over === null) return;
+    const plan = planReorder(visible, task.id, over.id, over.side);
+    if (plan === null) return;
+    try {
+      commit(ops.reorderTask(task.id, plan.afterId).ops);
+    } catch {
+      // `planReorder` only names siblings, so this is a task that vanished
+      // mid-drag; there is nothing to undo.
+    }
+  }
+
   const project = view.kind === "project" ? store.get("project", view.projectId) : null;
 
   // Switching rewards off while looking at the trophies would otherwise leave
@@ -381,6 +418,10 @@ function Workspace({
                   onEdit={() => setEditingId(task.id)}
                   onMoveUp={() => move(task, -1)}
                   onMoveDown={() => move(task, 1)}
+                  onReschedule={(target) => reschedule(task, target)}
+                  onPickDay={(day) => pickDay(task, day)}
+                  onPriority={(priority) => setPriority(task, priority)}
+                  {...(reorderable ? { onDrop: (event: PointerEvent) => drop(task, event) } : {})}
                 />
               ))}
             </ul>

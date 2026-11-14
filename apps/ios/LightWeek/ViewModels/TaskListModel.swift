@@ -238,6 +238,69 @@ final class TaskListModel: ObservableObject {
         }
     }
 
+    /// Puts a task on a day by name, or takes it off the calendar with `nil`.
+    ///
+    /// Through `Operations.reschedule`, so "next week" is the same Monday here
+    /// as on the web and for an agent. `today` is this device's local day.
+    func reschedule(_ task: LightKit.Task, to target: Reschedule?) {
+        _Concurrency.Task {
+            await write { operations in
+                let moved = try operations.reschedule(
+                    task, to: target, today: Schedule.localDay(Date()))
+                self.replace(moved.task)
+                return moved.ops
+            }
+        }
+    }
+
+    func setPriority(_ task: LightKit.Task, _ priority: Priority) {
+        guard priority != task.priority else { return }
+        update(task, .init(priority: priority))
+    }
+
+    /// The projects a task can be moved into: not the trophy cabinet, and not
+    /// one that has been archived — the same rule the web's `#Name` uses.
+    var movableProjects: [Project] {
+        projects.filter { !$0.isArchived && !$0.isRewards }
+    }
+
+    /// Files a task under another project, with its subtasks.
+    func move(_ task: LightKit.Task, to project: Project) {
+        _Concurrency.Task {
+            await write { operations in
+                let moved = operations.move(task, to: project.id, among: self.all)
+                for changed in moved.tasks {
+                    if let index = self.all.firstIndex(where: { $0.id == changed.id }) {
+                        self.all[index] = changed
+                    }
+                }
+                self.rebuild()
+                return moved.ops
+            }
+        }
+    }
+
+    /// How many tasks hang beneath this one, at any depth, for a confirmation
+    /// that says what it is about to take with it.
+    func subtaskCount(of task: LightKit.Task) -> Int {
+        // The same walk the delete itself makes, so the number and the effect
+        // cannot disagree.
+        Operations.subtaskIds(of: task, among: all).count
+    }
+
+    /// Deletes a task, and with it every subtask.
+    func delete(_ task: LightKit.Task) {
+        _Concurrency.Task {
+            await write { operations in
+                let deletion = operations.delete(task, among: self.all)
+                let gone = Set(deletion.deleted)
+                self.all.removeAll { gone.contains($0.id) }
+                self.rebuild()
+                return deletion.ops
+            }
+        }
+    }
+
     func setRewardsEnabled(_ enabled: Bool) {
         _Concurrency.Task {
             await write { operations in

@@ -94,6 +94,7 @@ It refuses to start on a bad token rather than failing on the first tool call.
 | `create_task` | | |
 | `create_task_from_text` | | One line in Todoist's shorthand; refuses anything it cannot read with certainty |
 | `update_task` | | Sparse — omitted fields are untouched |
+| `reschedule_task` | | Today / tomorrow / next week / weekend / none; the same rule the apps use |
 | `complete_task` | | Reschedules instead, when the task recurs |
 | `delete_task` | | Cascades to subtasks |
 | `move_task` | | Between projects, sections, parents |
