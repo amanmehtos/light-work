@@ -33,6 +33,8 @@ struct HomeView: View {
     let onSignOut: () -> Void
     let email: String?
 
+    @State private var addingProject = false
+
     var body: some View {
         let counts = model.counts
         List {
@@ -62,14 +64,33 @@ struct HomeView: View {
                           to: .project(entry.project.id), depth: entry.depth)
                 }
             } header: {
-                // The web's sidebar has the same eyebrow over the same tree.
-                Text("Projects")
-                    .font(DiurnalType.mono(.caption))
-                    .foregroundStyle(Color.dnMuted)
+                // The web's sidebar has the same eyebrow over the same tree,
+                // and the same "+" beside it. A control on the heading of the
+                // list it adds to, not a row of the list: the places above are
+                // meant to stay the web's eight.
+                HStack {
+                    Text("Projects")
+                        .font(DiurnalType.mono(.caption))
+                        .foregroundStyle(Color.dnMuted)
+                    Spacer(minLength: 0)
+                    Button { addingProject = true } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Color.dnInk)
+                            // A finger's width, not the glyph's.
+                            .frame(width: 44, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Add project")
+                }
             }
         }
         .listStyle(.plain)
         .refreshable { await model.load() }
+        .sheet(isPresented: $addingProject) {
+            NewProjectView(model: model) { addingProject = false }
+        }
         .navigationTitle("Light Week")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

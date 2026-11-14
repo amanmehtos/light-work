@@ -261,6 +261,12 @@ final class TaskListModel: ObservableObject {
         Navigation.projectTree(projects, rewardsEnabled: rewardsEnabled)
     }
 
+    /// Where a new project can be filed: the tree as drawn, without the trophy
+    /// cabinet. See `Navigation.parentChoices`.
+    var parentChoices: [Navigation.Entry] {
+        Navigation.parentChoices(projects, rewardsEnabled: rewardsEnabled)
+    }
+
     /// The inbox, if the account has one. Only the web makes one.
     var inbox: Project? { Navigation.inbox(visibleProjects) }
 
@@ -331,6 +337,47 @@ final class TaskListModel: ObservableObject {
                     content: content, projectId: projectId, existing: self.all)
                 self.all.append(made.task)
                 self.rebuild()
+                return made.ops
+            }
+        }
+    }
+
+    /// Adds a subtask under a task, last among its subtasks.
+    ///
+    /// The parent decides the project and section, so neither is passed; see
+    /// `Operations.createSubtask`. A folded parent is unfolded in the same push,
+    /// because the one gesture that adds a subtask should not leave it out of
+    /// sight — the web does the same.
+    func createSubtask(content: String, under parent: LightKit.Task) {
+        _Concurrency.Task {
+            await write { operations in
+                let made = try operations.createSubtask(
+                    content: content, under: parent, existing: self.all)
+                var ops = made.ops
+                self.all.append(made.task)
+                if let at = self.all.firstIndex(where: { $0.id == parent.id }) {
+                    let open = operations.setCollapsed(self.all[at], false)
+                    self.all[at] = open.task
+                    ops += open.ops
+                }
+                self.rebuild()
+                return ops
+            }
+        }
+    }
+
+    /// Adds a project, at the top level or under another.
+    ///
+    /// On screen first and over the wire immediately after, like every other
+    /// write here; a refusal (the parent was deleted elsewhere) or a failed push
+    /// raises the alert and reloads, so the project is not left on screen if the
+    /// server never heard of it.
+    func createProject(name: String, parentId: String?) {
+        _Concurrency.Task {
+            await write { operations in
+                let made = try operations.createProject(
+                    name: name, parentId: parentId, among: self.projects)
+                self.projects.append(made.project)
                 return made.ops
             }
         }

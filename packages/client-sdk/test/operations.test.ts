@@ -1086,3 +1086,186 @@ describe("reschedule", () => {
     expect(ops.reschedule("missing", "today", "2026-11-13")).toEqual({ result: null, ops: [] });
   });
 });
+
+describe("createProject, nested", () => {
+  it("files a project under a parent, three levels deep, each last among its siblings", () => {
+    const root = project("3WM");
+    const child = ops.createProject({ name: "BISNO", parentId: root.id }).result;
+    const grandchild = ops.createProject({ name: "Light Week", parentId: child.id }).result;
+    const sibling = ops.createProject({ name: "Assets", parentId: root.id }).result;
+
+    expect(grandchild.parentId).toBe(child.id);
+    expect(child.parentId).toBe(root.id);
+    expect(root.parentId).toBeNull();
+    // Ordered among its own siblings, not the whole account's projects.
+    expect(compareOrder(child.order, sibling.order)).toBe(-1);
+    expect(store.get("project", grandchild.id)).toEqual(grandchild);
+  });
+
+  it("writes every field of the project, null where there is nothing", () => {
+    const root = project("3WM");
+    const staged = ops.createProject({ name: "BISNO", parentId: root.id });
+    // A client reading a row with a key missing cannot tell "not set" from "not
+    // sent" — the same reason `createTask` writes a whole row.
+    expect(Object.keys(staged.ops[0]!.fields!).sort()).toEqual([
+      "color", "description", "id", "isArchived", "isCollapsed", "isFavorite", "isInbox",
+      "isRewards", "name", "order", "parentId", "view",
+    ]);
+    expect(staged.ops[0]!.fields!.parentId).toBe(root.id);
+    expect(project("top").parentId).toBeNull();
+    expect(ops.createProject({ name: "again" }).ops[0]!.fields!.parentId).toBeNull();
+  });
+
+  it("refuses a parent that is not there, so nothing is made that no tree can reach", () => {
+    expect(() => ops.createProject({ name: "orphan", parentId: "ghost" })).toThrow(/no project with id ghost/);
+    expect(store.all("project")).toHaveLength(0);
+  });
+
+  it("refuses the inbox and the trophies as parents", () => {
+    const inbox = ops.ensureInbox().result;
+    expect(() => ops.createProject({ name: "x", parentId: inbox.id })).toThrow(/inbox/);
+
+    const cabinet = store.get("project", ops.createProject({ name: "Rewards" }).result.id)!;
+    store.mutate("project", cabinet.id, { isRewards: true });
+    expect(() => ops.createProject({ name: "x", parentId: cabinet.id })).toThrow(/rewards/);
+  });
+
+  it("is taken with its parent by a recursive delete, and left alone by a plain one", () => {
+    const root = project("3WM");
+    const child = ops.createProject({ name: "BISNO", parentId: root.id }).result;
+    const grandchild = ops.createProject({ name: "Light Week", parentId: child.id }).result;
+
+    expect(ops.deleteProject(root.id, { recursive: true }).result.projects).toEqual([
+      grandchild.id,
+      child.id,
+      root.id,
+    ]);
+  });
+});
+
+describe("createTask, as a subtask", () => {
+  it("lives where its parent does: same project, same section", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const parent = ops.createTask({ projectId: p.id, content: "parent", sectionId: section.id }).result;
+
+    // Said or left unsaid, it ends up in the parent's section.
+    const unsaid = ops.createTask({ projectId: p.id, content: "a", parentId: parent.id }).result;
+    const said = ops.createTask({
+      projectId: p.id,
+      content: "b",
+      parentId: parent.id,
+      sectionId: section.id,
+    }).result;
+
+    expect(unsaid).toMatchObject({ parentId: parent.id, projectId: p.id, sectionId: section.id });
+    expect(said).toMatchObject({ parentId: parent.id, projectId: p.id, sectionId: section.id });
+  });
+
+  it("is written as a whole row with its parentId named", () => {
+    const p = project();
+    const parent = ops.createTask({ projectId: p.id, content: "parent" }).result;
+    const staged = ops.createTask({ projectId: p.id, content: "child", parentId: parent.id });
+
+    expect(staged.ops).toHaveLength(1);
+    expect(staged.ops[0]!.fields!.parentId).toBe(parent.id);
+    expect(staged.ops[0]!.fields).toHaveProperty("sectionId", null);
+  });
+
+  it("goes last among its parent's subtasks, in an order of its own", () => {
+    const p = project();
+    const parent = ops.createTask({ projectId: p.id, content: "parent" }).result;
+    const other = ops.createTask({ projectId: p.id, content: "another root" }).result;
+    const first = ops.createTask({ projectId: p.id, content: "1", parentId: parent.id }).result;
+    const second = ops.createTask({ projectId: p.id, content: "2", parentId: parent.id }).result;
+
+    expect(compareOrder(first.order, second.order)).toBe(-1);
+    // The roots' order is untouched by anything made beneath them.
+    expect(store.get("task", other.id)!.order).toBe(other.order);
+    expect(ops.reorderTask(second.id, null).result!.parentId).toBe(parent.id);
+  });
+
+  it("can nest more than once", () => {
+    const p = project();
+    const a = ops.createTask({ projectId: p.id, content: "a" }).result;
+    const b = ops.createTask({ projectId: p.id, content: "b", parentId: a.id }).result;
+    const c = ops.createTask({ projectId: p.id, content: "c", parentId: b.id }).result;
+    expect(c.parentId).toBe(b.id);
+  });
+
+  it("refuses a parent that is not there", () => {
+    const p = project();
+    expect(() => ops.createTask({ projectId: p.id, content: "x", parentId: "ghost" })).toThrow(
+      /no task with id ghost/,
+    );
+    expect(store.all("task")).toHaveLength(0);
+  });
+
+  it("refuses a project or section that is not its parent's, and stages nothing", () => {
+    const p = project();
+    const elsewhere = project("Elsewhere");
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const parent = ops.createTask({ projectId: p.id, content: "parent" }).result;
+
+    expect(() =>
+      ops.createTask({ projectId: elsewhere.id, content: "x", parentId: parent.id }),
+    ).toThrow(/same project/);
+    expect(() =>
+      ops.createTask({ projectId: p.id, content: "x", parentId: parent.id, sectionId: section.id }),
+    ).toThrow(/parent's section/);
+    // The label a refused task named is not left behind in the store.
+    expect(() =>
+      ops.createTask({ projectId: elsewhere.id, content: "x", parentId: parent.id, labelNames: ["orphan"] }),
+    ).toThrow();
+    expect(store.all("label")).toHaveLength(0);
+    expect(store.all("task")).toHaveLength(1);
+  });
+
+  it("cannot make a task its own ancestor, and the move guard still sees what it made", () => {
+    const p = project();
+    const parent = ops.createTask({ projectId: p.id, content: "parent" }).result;
+    const child = ops.createTask({ projectId: p.id, content: "child", parentId: parent.id }).result;
+    const grandchild = ops.createTask({ projectId: p.id, content: "g", parentId: child.id }).result;
+
+    // The new id is minted inside, so nothing can already point at it.
+    expect(new Set([parent.id, child.id, grandchild.id]).size).toBe(3);
+    expect(() => ops.moveTask(parent.id, { parentId: grandchild.id })).toThrow(/own subtasks/);
+  });
+
+  it("is deleted with its parent, comments and all", () => {
+    const p = project();
+    const parent = ops.createTask({ projectId: p.id, content: "parent" }).result;
+    const child = ops.createTask({ projectId: p.id, content: "child", parentId: parent.id }).result;
+    ops.addComment(child.id, "on the new subtask");
+
+    const deletion = ops.deleteTask(parent.id);
+
+    expect(deletion.result.deleted).toEqual([child.id, parent.id]);
+    expect(store.all("task")).toHaveLength(0);
+    expect(store.all("comment")).toHaveLength(0);
+  });
+
+  it("is deleted with its project, because it carries its parent's projectId", () => {
+    const p = project();
+    const parent = ops.createTask({ projectId: p.id, content: "parent" }).result;
+    const child = ops.createTask({ projectId: p.id, content: "child", parentId: parent.id }).result;
+    ops.addComment(child.id, "on the new subtask");
+
+    const result = ops.deleteProject(p.id).result;
+
+    expect(result.tasks.sort()).toEqual([parent.id, child.id].sort());
+    expect(store.all("task")).toHaveLength(0);
+    expect(store.all("comment")).toHaveLength(0);
+  });
+
+  it("follows its parent when the parent moves project", () => {
+    const p = project();
+    const to = project("To");
+    const parent = ops.createTask({ projectId: p.id, content: "parent" }).result;
+    const child = ops.createTask({ projectId: p.id, content: "child", parentId: parent.id }).result;
+
+    ops.moveTask(parent.id, { projectId: to.id });
+
+    expect(store.get("task", child.id)).toMatchObject({ projectId: to.id, parentId: parent.id });
+  });
+});

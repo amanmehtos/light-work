@@ -453,14 +453,21 @@ export function buildTools(): ToolDefinition[] {
     {
       name: "create_task",
       title: "Create a task",
-      description: "Adds a task to a project, optionally under a section or another task.",
+      description:
+        "Adds a task to a project, optionally under a section or as a subtask of another task. " +
+        "A subtask is filed with its parent: it must name the parent's project, and takes the parent's section.",
       readOnly: false,
       inputSchema: {
         projectId: z.string(),
         content: z.string().min(1),
         description: z.string().optional(),
         sectionId: z.string().optional(),
-        parentId: z.string().optional().describe("Makes this a subtask."),
+        parentId: z
+          .string()
+          .optional()
+          .describe(
+            "Makes this a subtask of that task. The parent must exist and be in projectId; the subtask is filed in the parent's section.",
+          ),
         priority: prioritySchema.optional(),
         due: dueSchema.optional(),
         deadlineDate: z.string().optional().describe("YYYY-MM-DD. When the task is owed."),
@@ -486,23 +493,31 @@ export function buildTools(): ToolDefinition[] {
           );
         }
 
-        const staged = context.ops.createTask({
-          projectId: String(args.projectId),
-          content: String(args.content),
-          ...(typeof args.description === "string" ? { description: args.description } : {}),
-          ...(typeof args.sectionId === "string" ? { sectionId: args.sectionId } : {}),
-          ...(typeof args.parentId === "string" ? { parentId: args.parentId } : {}),
-          ...(typeof args.priority === "number" ? { priority: args.priority as Priority } : {}),
-          due,
-          ...(typeof args.deadlineDate === "string"
-            ? { deadline: { date: args.deadlineDate } }
-            : {}),
-          ...(typeof args.durationMinutes === "number"
-            ? { duration: { amount: args.durationMinutes, unit: "minute" as const } }
-            : {}),
-          ...(Array.isArray(args.labels) ? { labelNames: args.labels as string[] } : {}),
-          ...(typeof args.reward === "string" ? { reward: args.reward } : {}),
-        });
+        // The parent rules (it exists, it is in this project) live in
+        // `Operations.createTask`; what it refuses is said back to the agent as
+        // a failure, as `move_task` does for its own guard.
+        let staged: ReturnType<typeof context.ops.createTask>;
+        try {
+          staged = context.ops.createTask({
+            projectId: String(args.projectId),
+            content: String(args.content),
+            ...(typeof args.description === "string" ? { description: args.description } : {}),
+            ...(typeof args.sectionId === "string" ? { sectionId: args.sectionId } : {}),
+            ...(typeof args.parentId === "string" ? { parentId: args.parentId } : {}),
+            ...(typeof args.priority === "number" ? { priority: args.priority as Priority } : {}),
+            due,
+            ...(typeof args.deadlineDate === "string"
+              ? { deadline: { date: args.deadlineDate } }
+              : {}),
+            ...(typeof args.durationMinutes === "number"
+              ? { duration: { amount: args.durationMinutes, unit: "minute" as const } }
+              : {}),
+            ...(Array.isArray(args.labels) ? { labelNames: args.labels as string[] } : {}),
+            ...(typeof args.reward === "string" ? { reward: args.reward } : {}),
+          });
+        } catch (error) {
+          return failure(error instanceof Error ? error.message : "could not create that task");
+        }
         await context.flush(staged.ops);
         return result({ task: formatTask(context, staged.result) });
       },
@@ -821,7 +836,8 @@ export function buildTools(): ToolDefinition[] {
     {
       name: "create_project",
       title: "Create a project",
-      description: "Adds a project, optionally nested under another.",
+      description:
+        "Adds a project, optionally nested under another (to any depth). The inbox and the Rewards project cannot hold projects.",
       readOnly: false,
       inputSchema: {
         name: z.string().min(1),
@@ -834,13 +850,19 @@ export function buildTools(): ToolDefinition[] {
         if (typeof args.parentId === "string" && context.store.get("project", args.parentId) === null) {
           return failure(`No project with id ${args.parentId}.`);
         }
-        const staged = context.ops.createProject({
-          name: String(args.name),
-          ...(typeof args.parentId === "string" ? { parentId: args.parentId } : {}),
-          ...(typeof args.color === "string" ? { color: args.color } : {}),
-          ...(typeof args.isFavorite === "boolean" ? { isFavorite: args.isFavorite } : {}),
-          ...(typeof args.description === "string" ? { description: args.description } : {}),
-        });
+        let staged: ReturnType<typeof context.ops.createProject>;
+        try {
+          staged = context.ops.createProject({
+            name: String(args.name),
+            ...(typeof args.parentId === "string" ? { parentId: args.parentId } : {}),
+            ...(typeof args.color === "string" ? { color: args.color } : {}),
+            ...(typeof args.isFavorite === "boolean" ? { isFavorite: args.isFavorite } : {}),
+            ...(typeof args.description === "string" ? { description: args.description } : {}),
+          });
+        } catch (error) {
+          // The inbox and the trophies cannot hold projects; see `createProject`.
+          return failure(error instanceof Error ? error.message : "could not create that project");
+        }
         await context.flush(staged.ops);
         return result({ project: formatProject(context.store, staged.result) });
       },

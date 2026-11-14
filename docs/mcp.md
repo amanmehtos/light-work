@@ -93,7 +93,7 @@ It refuses to start on a bad token rather than failing on the first tool call.
 | `list_labels` | ✓ | Labels with open-task counts |
 | `get_week_plan` | ✓ | The whole picture for a window, in one call |
 | `get_focus_stats` | ✓ | Where attention actually went |
-| `create_task` | | |
+| `create_task` | | With `parentId`, a subtask: the parent must exist and be in the same project; it is filed in the parent's section |
 | `create_task_from_text` | | One line in Todoist's shorthand; refuses anything it cannot read with certainty |
 | `update_task` | | Sparse — omitted fields are untouched |
 | `reschedule_task` | | Today / tomorrow / next week / weekend / none; the same rule the apps use |
@@ -101,7 +101,7 @@ It refuses to start on a bad token rather than failing on the first tool call.
 | `delete_task` | | Cascades to subtasks and their comments |
 | `move_task` | | Between projects, sections, parents; subtasks come with it |
 | `reorder_tasks` | | Full desired order of a sibling list |
-| `create_project` | | |
+| `create_project` | | With `parentId`, nested to any depth; not under the inbox or Rewards |
 | `delete_project` | | Sections and tasks go too; child projects only with `recursive` |
 | `create_section` | | |
 | `update_section` | | Rename, rewrite the notes, archive |

@@ -180,6 +180,22 @@ export class Operations {
       throw new Error("the account already has an inbox");
     }
     const parentId = input.parentId ?? null;
+    if (parentId !== null) {
+      // Checked here, not left to each caller, now that a person can reach this
+      // from the sidebar as well as an agent. A parent that is not in the store
+      // makes a project nothing draws — the tree is walked down from the root —
+      // and one filed under the inbox or the trophies would be drawn somewhere
+      // other than where it was put (the inbox draws no branch, so the sidebar
+      // lifts such a project to the top; the cabinet is hidden with rewards off,
+      // and its children with it). Refusing is kinder than a project that
+      // quietly lives somewhere else. A project cannot become its own ancestor
+      // here for the plainest reason: its id is minted below, so nothing can
+      // already point at it. `moveTask`'s guard is for a task that exists.
+      const parent = this.store.get("project", parentId);
+      if (parent === null) throw new Error(`no project with id ${parentId}`);
+      if (parent.isInbox) throw new Error("the inbox cannot hold projects; file it at the top level");
+      if (parent.isRewards) throw new Error("the rewards project cannot hold projects");
+    }
     const siblings = this.store
       .all("project")
       .filter((project) => project.parentId === parentId)
@@ -423,6 +439,10 @@ export class Operations {
     labelNames?: string[];
     reward?: string | null;
   }): Staged<Task> {
+    // First, before anything is staged: `createLabel` writes to the store, so a
+    // refusal after it would leave a label behind for a task that never was.
+    const placement = this.placementFor(input);
+
     const ops: Op[] = [];
     const labelIds: string[] = [];
     for (const name of input.labelNames ?? []) {
@@ -430,12 +450,6 @@ export class Operations {
       ops.push(...staged.ops);
       labelIds.push(staged.result.id);
     }
-
-    const placement = {
-      projectId: input.projectId,
-      sectionId: input.sectionId ?? null,
-      parentId: input.parentId ?? null,
-    };
 
     const task: Task = {
       id: newId(),
@@ -459,6 +473,46 @@ export class Operations {
     };
     ops.push(this.store.mutate("task", task.id, task));
     return { result: task, ops };
+  }
+
+  /**
+   * Where a new task goes: the project and section it names, or — for a subtask
+   * — the ones its parent is in.
+   *
+   * A subtask lives where its parent does, and two things rely on that. Every
+   * view draws a subtask beneath its parent and files it by its parent's
+   * section (`groupBySection`), and `deleteProject` finds a project's tasks by
+   * `projectId`: a subtask whose `projectId` differed from its parent's would
+   * survive the deletion of the parent's project, pointing at a parent that no
+   * longer exists. `deleteTask` walks `parentId`, so the other cascade needs no
+   * help, but this one does.
+   *
+   * So the parent has to exist (a subtask of nothing is an orphan from the
+   * moment it is made), and a project or section that disagrees with it is
+   * refused instead of quietly overridden: the caller said one thing and would
+   * get another, which for an agent is a write it will not know to check. What
+   * the caller leaves unsaid is filled in from the parent. An id minted here
+   * cannot already be anyone's ancestor, so there is no cycle to guard against;
+   * `moveTask` needs its guard because the task it moves exists.
+   */
+  private placementFor(input: {
+    projectId: string;
+    sectionId?: string | null;
+    parentId?: string | null;
+  }): Pick<Task, "projectId" | "sectionId" | "parentId"> {
+    const parentId = input.parentId ?? null;
+    if (parentId === null) {
+      return { projectId: input.projectId, sectionId: input.sectionId ?? null, parentId: null };
+    }
+    const parent = this.store.get("task", parentId);
+    if (parent === null) throw new Error(`no task with id ${parentId}`);
+    if (input.projectId !== parent.projectId) {
+      throw new Error("a subtask belongs to the same project as its parent");
+    }
+    if (input.sectionId != null && input.sectionId !== parent.sectionId) {
+      throw new Error("a subtask is filed in its parent's section");
+    }
+    return { projectId: parent.projectId, sectionId: parent.sectionId, parentId };
   }
 
   /**

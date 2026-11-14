@@ -36,25 +36,22 @@ public struct Operations: Sendable {
     /// Why a task could not be made.
     public enum CreateError: Error, Sendable, Equatable, LocalizedError {
         case emptyTitle
+        case emptyName
+        /// The parent a subtask or a project was to go under is not there — deleted
+        /// on another device since this screen was drawn.
+        case noSuchParent
+        /// The inbox and the trophy cabinet do not hold projects.
+        case cannotHoldProjects
 
         public var errorDescription: String? {
             switch self {
             case .emptyTitle: return "A task needs a title."
+            case .emptyName: return "A project needs a name."
+            case .noSuchParent: return "What this was to go under is gone. Pull to refresh and try again."
+            case .cannotHoldProjects: return "The inbox and Rewards can’t hold projects."
             }
         }
     }
-
-    /// Makes a task, at the end of its list.
-    ///
-    /// The Swift twin of `Operations.createTask` in `@light/client-sdk`, for a
-    /// phone that can finally add one. Deliberately no natural language: the
-    /// date rules live in the TypeScript parser, and a second implementation of
-    /// them in Swift would be a second place for them to drift — the rewards
-    /// rule already shows what that costs. So this takes what a person has
-    /// actually chosen: a title, a project, and the controls the editor has.
-    ///
-    /// `existing` is every task the caller knows about. The new one is placed
-    /// after the others in the same project at the top level, exactly as the
 
     /// Every field of a task, `null` where there is nothing.
     ///
@@ -96,6 +93,17 @@ public struct Operations: Sendable {
         ])
     }
 
+    /// Makes a task, at the end of its list.
+    ///
+    /// The Swift twin of `Operations.createTask` in `@light/client-sdk`, for a
+    /// phone that can finally add one. Deliberately no natural language: the
+    /// date rules live in the TypeScript parser, and a second implementation of
+    /// them in Swift would be a second place for them to drift — the rewards
+    /// rule already shows what that costs. So this takes what a person has
+    /// actually chosen: a title, a project, and the controls the editor has.
+    ///
+    /// `existing` is every task the caller knows about. The new one is placed
+    /// after the others in the same project at the top level, exactly as the
     /// web does, using the same `Order` keys, so a task added here sorts where
     /// the web would have put it.
     ///
@@ -111,17 +119,62 @@ public struct Operations: Sendable {
         priority: Priority = .none,
         now: Date = Date()
     ) throws -> (task: Task, ops: [Op]) {
+        try make(content: content, projectId: projectId, sectionId: nil, parentId: nil,
+                 existing: existing, priority: priority, now: now)
+    }
+
+    /// Makes a subtask, last among its parent's.
+    ///
+    /// The Swift twin of `createTask` with a `parentId` in `@light/client-sdk`,
+    /// and it keeps the same rules for the same reasons. A subtask lives where
+    /// its parent does — same project, same section — so it is not asked where:
+    /// every list draws it beneath its parent and files it by the parent's
+    /// section, and a project delete finds its tasks by `projectId`, so a subtask
+    /// with a different one would outlive the deletion of its parent's project.
+    /// The parent must still exist among `existing`; a subtask of nothing is an
+    /// orphan from the moment it is made. Nothing here can make a task its own
+    /// ancestor, because the id is minted inside — no cycle to guard against, the
+    /// way `moveTask` has to for a task that already exists.
+    ///
+    /// The parent is read from `existing`, not from the copy the caller holds: a
+    /// section or project it was moved to since the screen was drawn is where the
+    /// subtask has to go.
+    public func createSubtask(
+        content: String,
+        under parent: Task,
+        existing: [Task],
+        now: Date = Date()
+    ) throws -> (task: Task, ops: [Op]) {
+        guard let current = existing.first(where: { $0.id == parent.id }) else {
+            throw CreateError.noSuchParent
+        }
+        return try make(content: content, projectId: current.projectId,
+                        sectionId: current.sectionId, parentId: current.id,
+                        existing: existing, priority: .none, now: now)
+    }
+
+    private func make(
+        content: String,
+        projectId: String,
+        sectionId: String?,
+        parentId: String?,
+        existing: [Task],
+        priority: Priority,
+        now: Date
+    ) throws -> (task: Task, ops: [Op]) {
         let title = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { throw CreateError.emptyTitle }
 
+        // The list it joins: the same project, section and parent, which for a
+        // top-level task is what it always was.
         let siblings = existing.filter {
-            $0.projectId == projectId && $0.sectionId == nil && $0.parentId == nil
+            $0.projectId == projectId && $0.sectionId == sectionId && $0.parentId == parentId
         }
         let created = Task(
             id: LightID.new(now: now),
             projectId: projectId,
-            sectionId: nil,
-            parentId: nil,
+            sectionId: sectionId,
+            parentId: parentId,
             content: title,
             description: "",
             priority: priority,
@@ -136,6 +189,63 @@ public struct Operations: Sendable {
             createdAt: ISO8601DateFormatter.lightWeek.string(from: now))
 
         return (created, [op(kind: "task", id: created.id, fields: taskFields(created))])
+    }
+
+    /// Makes a project, last among its parent's children — or last at the top
+    /// level, with no parent.
+    ///
+    /// The Swift twin of `createProject` in `@light/client-sdk`, with the same
+    /// refusals: a parent that is not there makes a project no tree can reach,
+    /// and the inbox and the trophy cabinet are not branches (the sidebar lifts
+    /// anything filed under the inbox to the top, and the cabinet is hidden with
+    /// rewards off, taking its children with it). Nesting goes to any depth; the
+    /// id is minted here, so a project cannot become its own ancestor.
+    ///
+    /// Written as a whole row through `projectFields`, every key named.
+    public func createProject(
+        name: String, parentId: String? = nil, among projects: [Project]
+    ) throws -> (project: Project, ops: [Op]) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw CreateError.emptyName }
+        if let parentId {
+            guard let parent = projects.first(where: { $0.id == parentId }) else {
+                throw CreateError.noSuchParent
+            }
+            guard !parent.isInbox, !parent.isRewards else { throw CreateError.cannotHoldProjects }
+        }
+
+        let made = Project(
+            id: LightID.new(), parentId: parentId, name: trimmed, color: "charcoal",
+            order: Order.afterLast(projects.filter { $0.parentId == parentId }.map(\.order)),
+            isFavorite: false, isArchived: false, isInbox: false, isRewards: false,
+            description: "")
+        return (made, [op(kind: "project", id: made.id, fields: projectFields(made))])
+    }
+
+    /// Every field of a project, `null` where there is nothing.
+    ///
+    /// For the same reason as `taskFields`, and with the same cost of getting it
+    /// wrong: a whole-row write that leaves a key out is a row a client cannot
+    /// tell "not set" from "not sent" about. `Project` here does not carry `view`
+    /// or `isCollapsed` — it has never needed to read them — but the row the web
+    /// writes has both, so a project made on the phone names them too, at the
+    /// values a new project has. One place, so `rewardsProject` and
+    /// `createProject` cannot spell it two ways.
+    func projectFields(_ project: Project) -> JSONValue {
+        .object([
+            "id": .string(project.id),
+            "parentId": project.parentId.map { JSONValue.string($0) } ?? .null,
+            "name": .string(project.name),
+            "color": .string(project.color),
+            "order": .string(project.order),
+            "view": .string("list"),
+            "isFavorite": .bool(project.isFavorite),
+            "isArchived": .bool(project.isArchived),
+            "isInbox": .bool(project.isInbox),
+            "isRewards": .bool(project.isRewards),
+            "isCollapsed": .bool(false),
+            "description": .string(project.description),
+        ])
     }
 
     // MARK: - Editing
@@ -503,19 +613,7 @@ public struct Operations: Sendable {
             isInbox: false,
             isRewards: true,
             description: "")
-        let fields: JSONValue = .object([
-            "id": .string(made.id),
-            "parentId": .null,
-            "name": .string(made.name),
-            "color": .string(made.color),
-            "order": .string(made.order),
-            "isFavorite": .bool(false),
-            "isArchived": .bool(false),
-            "isInbox": .bool(false),
-            "isRewards": .bool(true),
-            "description": .string(""),
-        ])
-        return (made, [op(kind: "project", id: made.id, fields: fields)])
+        return (made, [op(kind: "project", id: made.id, fields: projectFields(made))])
     }
 
     public func setRewardsEnabled(_ enabled: Bool) -> [Op] {

@@ -20,6 +20,9 @@ struct TaskListView: View {
     @State private var editing: LightKit.Task?
     @State private var rescheduling: LightKit.Task?
     @State private var deleting: LightKit.Task?
+    /// The task a subtask is being typed for, and what has been typed so far.
+    @State private var addingSubtaskTo: LightKit.Task?
+    @State private var subtaskTitle = ""
     @State private var showingPreferences = false
     @State private var handoffError: String?
 
@@ -62,6 +65,30 @@ struct TaskListView: View {
             Button("OK") { handoffError = nil }
         } message: {
             Text(handoffError ?? "")
+        }
+        // The subtask's title. An alert with one field, not a sheet: it is a
+        // title and nothing else, and the sheet's other fields (a date, a
+        // priority) are the editor, one tap on the new row.
+        //
+        // `presenting:` hands the actions the task as it was when the alert came
+        // up, so the Add button does not depend on whether dismissal has already
+        // cleared the state it would otherwise read.
+        .alert(
+            Text(addingSubtaskTo.map { "Subtask of “\($0.content)”" } ?? "Add subtask"),
+            isPresented: Binding(
+                get: { addingSubtaskTo != nil },
+                set: { shown in if !shown { addingSubtaskTo = nil } }),
+            presenting: addingSubtaskTo
+        ) { parent in
+            TextField("Title", text: $subtaskTitle)
+            Button("Add") {
+                // An empty title is a tap on Add by mistake, not a write to refuse
+                // with an alert of its own.
+                let title = subtaskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !title.isEmpty { model.createSubtask(content: title, under: parent) }
+                subtaskTitle = ""
+            }
+            Button("Cancel", role: .cancel) { subtaskTitle = "" }
         }
         .alert("That change didn’t save", isPresented: Binding(
             get: { model.writeError != nil },
@@ -278,6 +305,21 @@ struct TaskListView: View {
             Label("Reschedule", systemImage: "calendar")
         }
 
+        // "Add subtask" on the task itself, as Todoist's task menu has it, and
+        // not an indent gesture. Indenting turns a task into a subtask of the
+        // row above, and what is above differs by list — in Today it is some
+        // other project's task — so it cannot mean one thing here. This means
+        // the same on every row, and it makes a task rather than rearranging
+        // one. Not on a finished task, and not in Done, which does not nest.
+        if !task.isCompleted {
+            Button {
+                subtaskTitle = ""
+                addingSubtaskTo = task
+            } label: {
+                Label("Add subtask", systemImage: "plus")
+            }
+        }
+
         Menu {
             ForEach(model.movableProjects.filter { $0.id != task.projectId }) { project in
                 Button(project.name) { model.move(task, to: project) }
@@ -373,12 +415,18 @@ struct TaskRowView: View {
 
                 BadgeFlow(spacing: 6) { badges }
             }
+            // Takes the width the row has left, rather than whatever it would
+            // like. `BadgeFlow` answers an unspecified width proposal with the
+            // whole run of badges on one infinite line — it has no other
+            // sensible answer — and SwiftUI asks exactly that when sizing a
+            // row. Unbounded, the column claimed that width, the spacer
+            // collapsed and Focus was pushed off the right edge of the screen.
+            // Bounded, the flow is handed a real width and wraps inside it.
+            .frame(maxWidth: .infinity, alignment: .leading)
             // Tapping the task opens it; the box and the Focus button are
             // their own targets and keep their own taps.
             .contentShape(Rectangle())
             .onTapGesture(perform: onEdit)
-
-            Spacer(minLength: 0)
 
             if !row.task.isCompleted {
                 Button(action: onFocus) {
@@ -390,6 +438,9 @@ struct TaskRowView: View {
                         .background(Color.dnInk, in: Capsule())
                 }
                 .buttonStyle(.plain)
+                // Never squeezed: it is the one control here with a fixed
+                // size, and a half-drawn "Focus" is worse than a narrower title.
+                .fixedSize()
                 .accessibilityLabel("Focus on \(row.task.content) in Light Minute")
             }
         }

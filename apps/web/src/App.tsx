@@ -295,6 +295,37 @@ function Workspace({
     }
   }
 
+  function addProject(name: string, parentId: string | null) {
+    // Straight to `createProject`: a project is a name and a place, with no
+    // shorthand to read, so there is no parse to show first (compare `addTask`).
+    // It can refuse — the parent went away or became somewhere nothing can be
+    // filed — and that is said, as a failed add is everywhere here.
+    try {
+      commit(ops.createProject({ name, parentId }).ops);
+      setAddError(null);
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : "That project could not be added.");
+    }
+  }
+
+  function addSubtask(parent: Task, content: string) {
+    // Plain `createTask`, not `createTaskFromText`. Quick Add is allowed to read
+    // dates because the chips show what it read before Enter; this field has no
+    // chips, so "call mum tomorrow" would be a date taken on trust. The title is
+    // the title, and the row's own date chip is one pick away.
+    try {
+      const made = ops.createTask({ projectId: parent.projectId, parentId: parent.id, content });
+      // A folded parent would swallow the subtask just made, and the one gesture
+      // that adds one should not leave it out of sight. Unfolded in the same
+      // commit, so no device sees the subtask hidden.
+      commit([...made.ops, ...ops.setCollapsed("task", parent.id, false).ops]);
+      setAddError(null);
+    } catch (error) {
+      // The parent was deleted on another device since this row was drawn.
+      setAddError(error instanceof Error ? error.message : "That subtask could not be added.");
+    }
+  }
+
   function complete(task: Task) {
     if (task.isCompleted) {
       commit(ops.uncompleteTask(task.id).ops);
@@ -718,6 +749,9 @@ function Workspace({
         onComplete={() => complete(task)}
         onSelect={() => setSelectedId(selectedId === task.id ? null : task.id)}
         onEdit={() => setEditingId(task.id)}
+        // Only where the list nests, and not on a finished task: in Completed
+        // and search a new subtask would not be drawn where it was added.
+        {...(nests && !task.isCompleted ? { onAddSubtask: (content: string) => addSubtask(task, content) } : {})}
         onMoveUp={() => move(task, -1)}
         onMoveDown={() => move(task, 1)}
         onReschedule={(target) => reschedule(task, target)}
@@ -788,6 +822,7 @@ function Workspace({
             labelCounts={labelCounts}
             today={today}
             rewardsEnabled={rewardsEnabled}
+            onAddProject={addProject}
           />
         </div>
 

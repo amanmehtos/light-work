@@ -80,6 +80,14 @@ html, body, #root { height: 100%; }
 
 .sidebar-heading { display: block; margin: 1rem 0 0.25rem; padding-left: 0.625rem; }
 
+/* The heading and the "+" that adds to the tree under it. The "+" is a ghost
+   button, so it is ink on paper like the rest, and never a row of the nav. */
+.sidebar-heading-row { display: flex; align-items: center; justify-content: space-between; }
+.sidebar-heading-row .sidebar-heading { flex: 1; }
+.add-project__toggle { margin-top: 0.75rem; }
+.add-project { display: grid; gap: 0.375rem; padding: 0.25rem 0.5rem 0.5rem; }
+.add-project__actions { display: flex; gap: 0.5rem; }
+
 /* --- main column ---------------------------------------------------- */
 
 .main-column { flex: 1; min-width: 0; max-width: 48rem; }
@@ -502,3 +510,9 @@ html, body, #root { height: 100%; }
 .add-section { margin-top: 1.25rem; }
 .add-section--open { display: flex; gap: 0.5rem; align-items: center; max-width: 24rem; }
 .add-section--open .dn-input { flex: 1; }
+
+/* The field that adds a subtask, under its parent's row. Indented one step, the
+   way the subtask it makes will be. */
+.add-subtask { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.375rem 0 0.5rem 1.75rem; max-width: 28rem; }
+.add-subtask .dn-input { flex: 1; min-width: 10rem; }
+.add-subtask__added { flex-basis: 100%; margin: 0; }

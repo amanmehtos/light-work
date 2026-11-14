@@ -59,4 +59,15 @@ public enum Navigation {
         walk(nil, depth: 0)
         return entries
     }
+
+    /// Where a new project can be filed, in the order the tree draws them.
+    ///
+    /// The Swift twin of `parentChoices` in `apps/web/src/projects.ts`: every
+    /// project the tree shows except the trophy cabinet, which nothing is filed
+    /// under by hand and `Operations.createProject` refuses. The inbox is not in
+    /// the tree and so not here. What is offered is exactly what will be
+    /// accepted, and exactly what can be seen.
+    public static func parentChoices(_ projects: [Project], rewardsEnabled: Bool) -> [Entry] {
+        projectTree(projects, rewardsEnabled: rewardsEnabled).filter { !$0.project.isRewards }
+    }
 }

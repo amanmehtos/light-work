@@ -549,6 +549,46 @@ describe("move_task", () => {
   });
 });
 
+describe("create_task, as a subtask", () => {
+  it("files the subtask with its parent, and shows it as one", async () => {
+    const { project } = await seed();
+    const section = (await call("create_section", { projectId: project.id, name: "Phase one" }))
+      .structuredContent.section;
+    const parent = (
+      await call("create_task", { projectId: project.id, content: "parent", sectionId: section.id })
+    ).structuredContent.task;
+
+    const child = (
+      await call("create_task", { projectId: project.id, content: "child", parentId: parent.id })
+    ).structuredContent.task;
+
+    expect(child.parentId).toBe(parent.id);
+    expect(session.context.store.get("task", child.id)).toMatchObject({
+      projectId: project.id,
+      sectionId: section.id,
+    });
+    expect(server.liveCount("task")).toBe(3);
+  });
+
+  it("refuses a parent that does not exist, or one in another project", async () => {
+    const { project, task } = await seed();
+    const elsewhere = (await call("create_project", { name: "elsewhere" })).structuredContent.project;
+
+    const ghost = await call("create_task", { projectId: project.id, content: "x", parentId: "ghost" });
+    expect(ghost.isError).toBe(true);
+
+    const crossed = await call("create_task", {
+      projectId: elsewhere.id,
+      content: "x",
+      parentId: task.id,
+    });
+    expect(crossed.isError).toBe(true);
+    expect(crossed.content[0]!.text).toContain("same project");
+    // Nothing was written for either.
+    expect(server.liveCount("task")).toBe(1);
+  });
+});
+
 describe("delete_task", () => {
   it("deletes a task with its subtasks", async () => {
     const { project } = await seed();
@@ -678,6 +718,14 @@ describe("projects", () => {
   it("refuses an unknown parent", async () => {
     const response = await call("create_project", { name: "orphan", parentId: "ghost" });
     expect(response.isError).toBe(true);
+  });
+
+  it("will not file a project under the inbox", async () => {
+    const inbox = session.context.ops.ensureInbox();
+    await session.context.flush(inbox.ops);
+    const response = await call("create_project", { name: "x", parentId: inbox.result.id });
+    expect(response.isError).toBe(true);
+    expect(response.content[0]!.text).toContain("inbox");
   });
 
   it("counts open tasks per project", async () => {

@@ -17,9 +17,9 @@
  */
 
 import { useState } from "react";
-import type { Project } from "@light/core";
-import { compareOrder } from "@light/core";
 import type { LightStore } from "@light/client-sdk";
+import { parentChoices, projectTree } from "../projects.js";
+import { ProjectsHeading } from "./ProjectsHeading.js";
 
 export type View =
   | { kind: "today" }
@@ -68,6 +68,7 @@ export function Sidebar({
   labelCounts,
   today,
   rewardsEnabled,
+  onAddProject,
 }: {
   store: LightStore;
   view: View;
@@ -82,40 +83,18 @@ export function Sidebar({
   today: string;
   /** With rewards off the trophy cabinet is hidden, not deleted. */
   rewardsEnabled: boolean;
+  /** Makes a project, at the top level when `parentId` is null. */
+  onAddProject: (name: string, parentId: string | null) => void;
 }) {
   const [labelsOpen, setLabelsOpen] = useState(false);
   // Unfolded whenever one label is the view, so the entry that is current is
   // never hidden inside a closed list.
   const labelsShown = labelsOpen || view.kind === "label";
 
-  const projects = store
-    .all("project")
-    .filter((project) => !project.isArchived)
-    .filter((project) => rewardsEnabled || !project.isRewards);
-
-  // The inbox is a place you go, like Today, not a project you organise, so it
-  // gets its own entry above the views and is left out of the tree. Which one
-  // is by flag, never by name: a project merely called "Inbox" is not it.
-  const inbox = projects.find((project) => project.isInbox) ?? null;
-  const byParent = new Map<string | null, Project[]>();
-  for (const project of projects) {
-    // Every flagged inbox, not just the one the nav entry chose. Duplicates
-    // should not exist — `ensureInbox` keeps one — but a cold-start race on
-    // two devices can still mint a second, and when that happens the sidebar
-    // showing "Inbox" twice is how the user finds out. One entry at the top,
-    // and the strays stay out of the tree rather than advertising the bug.
-    if (project.isInbox) continue;
-    // Anything filed under the inbox rises to the top level instead, because
-    // the inbox no longer draws a branch to hang it from, and a project that
-    // cannot be reached from the sidebar is worse than one that moved up.
-    const parentId = inbox !== null && project.parentId === inbox.id ? null : project.parentId;
-    const siblings = byParent.get(parentId) ?? [];
-    siblings.push(project);
-    byParent.set(parentId, siblings);
-  }
-  for (const siblings of byParent.values()) {
-    siblings.sort((a, b) => compareOrder(a.order, b.order));
-  }
+  // The tree and the inbox are worked out in `projects.ts`, because the
+  // add-project form below offers the same tree as places to file a project.
+  const tree = projectTree(store.all("project"), rewardsEnabled);
+  const { inbox, byParent } = tree;
 
   const openCount = (projectId: string): number =>
     store.all("task").filter((task) => task.projectId === projectId && !task.isCompleted).length;
@@ -225,7 +204,7 @@ export function Sidebar({
         {entry(completed)}
       </ul>
 
-      <div className="dn-eyebrow sidebar-heading">Projects</div>
+      <ProjectsHeading choices={parentChoices(tree)} onAdd={onAddProject} />
       {renderTree(null, 0) ?? <p className="dn-hint pad">No projects yet.</p>}
     </nav>
   );

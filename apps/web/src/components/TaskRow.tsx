@@ -11,8 +11,10 @@
  * rescheduling or reprioritising a task is one pick and never opens the editor.
  */
 
+import { useState } from "react";
 import type { Label, Priority, Task } from "@light/core";
 import type { LightStore, Operations, RescheduleTarget } from "@light/client-sdk";
+import { AddSubtask } from "./AddSubtask.js";
 import { Draggable } from "./Draggable.js";
 import { RowMenu, type MenuItem } from "./RowMenu.js";
 
@@ -134,6 +136,7 @@ export function TaskRow({
   onComplete,
   onSelect,
   onEdit,
+  onAddSubtask,
   onMoveUp,
   onMoveDown,
   onReschedule,
@@ -152,6 +155,12 @@ export function TaskRow({
   onComplete: () => void;
   onSelect: () => void;
   onEdit: () => void;
+  /**
+   * Adds a subtask under this task. Absent where one would not be drawn where it
+   * was added or would mean nothing — a finished task, and the lists that do not
+   * nest — and the row then has no button for it.
+   */
+  onAddSubtask?: (content: string) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onReschedule: (target: RescheduleTarget) => void;
@@ -165,6 +174,10 @@ export function TaskRow({
    */
   onDrop?: (event: PointerEvent) => void;
 }) {
+  // The field under the row, open or not. Local to the row: nothing else on the
+  // page cares, and it should not survive the row being scrolled off and back.
+  const [addingSubtask, setAddingSubtask] = useState(false);
+
   const labels = task.labelIds
     .map((id) => store.get("label", id))
     .filter((label): label is Label => label !== null);
@@ -377,6 +390,27 @@ export function TaskRow({
             Focus
           </a>
         )}
+        {/* "Add subtask" lives on the task, as Todoist's task menu has it, and
+            not as an indent gesture on the row below another. Indenting makes a
+            task into a subtask of whatever happens to sit above it, and what
+            sits above is different in every list: in a project it is a sibling,
+            in Today or a label's view it is some other project's task, where
+            filing under it would silently move the task. This button means the
+            same on every row, and it is the only gesture that makes a task
+            rather than rearranging one. Indenting an existing task is
+            `Operations.moveTask` with a `parentId`, which an agent has already.
+            Revealed like the arrows beside it. */}
+        {onAddSubtask !== undefined && (
+          <button
+            type="button"
+            className="dn-btn dn-btn--ghost dn-btn--sm reorder"
+            aria-label={`Add subtask to ${task.content}`}
+            aria-expanded={addingSubtask}
+            onClick={() => setAddingSubtask(!addingSubtask)}
+          >
+            + Subtask
+          </button>
+        )}
         {/* These stay beside the drag. They are the same act for the keyboard
             and for a screen reader, which cannot drag — but they are not worth
             two permanent buttons on every row, so they wait for a pointer or
@@ -428,6 +462,13 @@ export function TaskRow({
         >
           {card}
         </Draggable>
+      )}
+      {addingSubtask && onAddSubtask !== undefined && (
+        <AddSubtask
+          parentTitle={task.content}
+          onAdd={onAddSubtask}
+          onClose={() => setAddingSubtask(false)}
+        />
       )}
     </li>
   );
