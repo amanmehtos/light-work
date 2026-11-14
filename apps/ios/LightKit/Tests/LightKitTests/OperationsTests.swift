@@ -562,3 +562,59 @@ final class MoveTests: XCTestCase {
         XCTAssertEqual(moved.tasks, [here], "and does not quietly drop its section")
     }
 }
+
+/// The trophy op, which was wrong in a way nothing on the phone could show.
+final class TrophyFieldsTests: XCTestCase {
+
+    private let ops = Operations(clock: Clock(node: "test-device"))
+
+    private func project(name: String = "Work", isRewards: Bool = false) -> Project {
+        Project(id: LightID.new(), parentId: nil, name: name, color: "charcoal",
+                order: Order.first, isFavorite: false, isArchived: false,
+                isInbox: false, isRewards: isRewards, description: "")
+    }
+
+    private func task(in project: Project, reward: String?) -> LightKit.Task {
+        LightKit.Task(
+            id: LightID.new(), projectId: project.id, sectionId: nil, parentId: nil,
+            content: "Ready the deck", description: "", priority: .none, order: Order.first,
+            due: nil, deadline: nil, duration: nil, labelIds: [], reward: reward,
+            isCompleted: false, completedAt: nil,
+            createdAt: ISO8601DateFormatter.lightWeek.string(from: Date()))
+    }
+
+    func testTheTrophyOpNamesEveryFieldIncludingTheNullOnes() throws {
+        let work = project()
+        let done = try ops.complete(task(in: work, reward: "An hour in the sun"),
+                                    rewardsEnabled: true, projects: [work])
+
+        let trophyOp = try XCTUnwrap(done.ops.last)
+        guard case .object(let fields)? = trophyOp.fields else {
+            return XCTFail("the trophy op should carry an object")
+        }
+
+        // `parentId` is the one that mattered: encoding the struct omitted it,
+        // and the web's project list filters on `parentId === null`, so a
+        // reward earned here never appeared there. The rest are pinned with it
+        // so the next omission is caught by this test rather than by a user.
+        XCTAssertEqual(fields["parentId"], JSONValue.null)
+        XCTAssertEqual(fields.keys.sorted(), [
+            "addedById", "assigneeId", "completedAt", "content", "createdAt",
+            "dayOrder", "deadline", "description", "due", "duration", "id",
+            "isCollapsed", "isCompleted", "labelIds", "order", "parentId",
+            "priority", "projectId", "reward", "sectionId",
+        ])
+    }
+
+    func testTheTrophyCarriesItsOwnContentAndProvenance() throws {
+        let work = project()
+        let done = try ops.complete(task(in: work, reward: "An hour in the sun"),
+                                    rewardsEnabled: true, projects: [work])
+        let trophyOp = try XCTUnwrap(done.ops.last)
+        guard case .object(let fields)? = trophyOp.fields else { return XCTFail("object") }
+
+        XCTAssertEqual(fields["content"], JSONValue.string("An hour in the sun"))
+        XCTAssertEqual(fields["isCompleted"], JSONValue.bool(false))
+        XCTAssertEqual(fields["reward"], JSONValue.null, "a trophy earns nothing further")
+    }
+}

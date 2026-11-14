@@ -55,6 +55,48 @@ public struct Operations: Sendable {
     ///
     /// `existing` is every task the caller knows about. The new one is placed
     /// after the others in the same project at the top level, exactly as the
+
+    /// Every field of a task, `null` where there is nothing.
+    ///
+    /// Encoding a `Task` will not do. Swift's `Codable` omits an optional left
+    /// nil, and `Task` does not carry `dayOrder`, `isCollapsed` or the
+    /// assignee fields at all — so the patch would arrive missing keys, and
+    /// the web reads a missing `parentId` as "not null", which hides the task
+    /// from its project list. That is not hypothetical: it is how a reward
+    /// earned on the phone became invisible in the web's Rewards project.
+    ///
+    /// One place rather than two, because this has now been got wrong once and
+    /// spelled out correctly once, and a third copy would eventually disagree
+    /// with both.
+    func taskFields(_ task: Task) -> JSONValue {
+        func optional<T: Encodable>(_ value: T?) -> JSONValue {
+            guard let value else { return .null }
+            return (try? JSONValue.encoding(value)) ?? .null
+        }
+        return .object([
+            "id": .string(task.id),
+            "projectId": .string(task.projectId),
+            "sectionId": task.sectionId.map { JSONValue.string($0) } ?? .null,
+            "parentId": task.parentId.map { JSONValue.string($0) } ?? .null,
+            "content": .string(task.content),
+            "description": .string(task.description),
+            "priority": .integer(task.priority.rawValue),
+            "order": .string(task.order),
+            "dayOrder": .null,
+            "due": optional(task.due),
+            "deadline": optional(task.deadline),
+            "duration": optional(task.duration),
+            "labelIds": .array(task.labelIds.map { JSONValue.string($0) }),
+            "reward": task.reward.map { JSONValue.string($0) } ?? .null,
+            "isCompleted": .bool(task.isCompleted),
+            "completedAt": task.completedAt.map { JSONValue.string($0) } ?? .null,
+            "isCollapsed": .bool(false),
+            "assigneeId": .null,
+            "addedById": .null,
+            "createdAt": .string(task.createdAt),
+        ])
+    }
+
     /// web does, using the same `Order` keys, so a task added here sorts where
     /// the web would have put it.
     ///
@@ -95,29 +137,7 @@ public struct Operations: Sendable {
             completedAt: nil,
             createdAt: ISO8601DateFormatter.lightWeek.string(from: now))
 
-        let fields: JSONValue = .object([
-            "id": .string(created.id),
-            "projectId": .string(projectId),
-            "sectionId": .null,
-            "parentId": .null,
-            "content": .string(created.content),
-            "description": .string(""),
-            "priority": .integer(priority.rawValue),
-            "order": .string(created.order),
-            "dayOrder": .null,
-            "due": .null,
-            "deadline": .null,
-            "duration": .null,
-            "labelIds": .array([]),
-            "reward": .null,
-            "isCompleted": .bool(false),
-            "completedAt": .null,
-            "isCollapsed": .bool(false),
-            "assigneeId": .null,
-            "addedById": .null,
-            "createdAt": .string(created.createdAt),
-        ])
-        return (created, [op(kind: "task", id: created.id, fields: fields)])
+        return (created, [op(kind: "task", id: created.id, fields: taskFields(created))])
     }
 
     // MARK: - Editing
@@ -411,7 +431,7 @@ public struct Operations: Sendable {
             isCompleted: false,
             completedAt: nil,
             createdAt: ISO8601DateFormatter.lightWeek.string(from: now))
-        ops.append(op(kind: "task", id: trophy.id, fields: try JSONValue.encoding(trophy)))
+        ops.append(op(kind: "task", id: trophy.id, fields: taskFields(trophy)))
 
         return Completion(task: done, createdProject: created, earned: trophy, ops: ops)
     }
