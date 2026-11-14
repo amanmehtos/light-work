@@ -132,6 +132,7 @@ html, body, #root { height: 100%; }
  * catching the light from the same direction. The gap is what lets the
  * shadows be seen at all.
  */
+.tasks > li { scroll-margin-top: 4.5rem; scroll-margin-bottom: 1rem; }
 .tasks {
   list-style: none;
   margin: 0;
@@ -368,6 +369,14 @@ html, body, #root { height: 100%; }
 .editor-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
 .editor-actions { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem; }
 
+/* The `?` sheet: caps on the left, what they do on the right. */
+.shortcuts { margin: 0.75rem 0 1rem; display: grid; gap: 0.5rem; }
+.shortcut { display: grid; grid-template-columns: 6.5rem 1fr; align-items: center; gap: 0.75rem; }
+.shortcut-keys { display: flex; gap: 0.25rem; margin: 0; }
+.shortcut-label { margin: 0; }
+
+.search-field { margin: 1rem 0 1.25rem; }
+
 .preference { display: grid; gap: 0.375rem; margin: 0.75rem 0 1.25rem; }
 .preference-toggle { font-size: 1rem; }
 .preference .dn-hint { max-width: 34rem; }
@@ -417,10 +426,17 @@ html, body, #root { height: 100%; }
   transition: opacity 0.12s ease;
 }
 .task:hover .reorder,
-.task:focus-within .reorder {
+.task:focus-within .reorder,
+.task.selected .reorder {
   opacity: 1;
   pointer-events: auto;
 }
+
+/* `.selected` joins hover and focus because `j` and `k` move the selection
+   without moving focus: the row is the one being acted on, and the way to move
+   it is a key press away, so its arrows should be showing — as its "date" and
+   "priority" chips already do (`.row-chip--add`). A row selected by click gains
+   them too, and keeps them until the selection moves on. */
 
 /* A touchscreen has no hover to reveal them with, and the drag handle is a
    deliberate, small target there. Leave them out in the open. */

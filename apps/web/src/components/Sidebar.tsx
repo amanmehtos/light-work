@@ -19,6 +19,9 @@ export type View =
   | { kind: "upcoming" }
   | { kind: "all" }
   | { kind: "completed" }
+  // Not a place so much as a question; `/` is the usual way in. It renders the
+  // same rows as every other list, from the query that App holds.
+  | { kind: "search" }
   | { kind: "project"; projectId: string };
 
 function NavItem({
@@ -140,6 +143,7 @@ export function Sidebar({
     // Without this, imported history — a Todoist account brings in hundreds of
     // completed tasks — would be synced but unreachable.
     { view: { kind: "completed" }, label: "Completed", count: counts.completed },
+    { view: { kind: "search" }, label: "Search", count: 0 },
   ];
 
   return (

@@ -12,7 +12,13 @@
  */
 
 import { compareOrder, type Due, type Priority, type Task } from "@light/core";
-import { meaning, parseRecurrence, QuickAddRefusal, type RescheduleTarget } from "@light/client-sdk";
+import {
+  meaning,
+  parseRecurrence,
+  QuickAddRefusal,
+  searchTasks,
+  type RescheduleTarget,
+} from "@light/client-sdk";
 import { z } from "zod";
 import type { ToolContext } from "./context.js";
 import { failure, formatProject, formatTask, humanDuration, projectPath, result } from "./format.js";
@@ -120,7 +126,10 @@ export function buildTools(): ToolDefinition[] {
         dueAfter: z.string().optional().describe("YYYY-MM-DD, inclusive."),
         overdueOnly: z.boolean().optional().default(false),
         includeCompleted: z.boolean().optional().default(false),
-        search: z.string().optional().describe("Case-insensitive substring of the title."),
+        search: z.string().optional().describe(
+          "Case-insensitive substring of the title, the notes or a label name, best match first " +
+            "(titles, then labels, then notes). Same matching as the app's search. Blank means no filter.",
+        ),
         limit: z.number().int().min(1).max(500).optional().default(100),
       },
       handler: async (args, context) => {
@@ -133,25 +142,34 @@ export function buildTools(): ToolDefinition[] {
           return failure(`No label named "${args.label}".`);
         }
 
-        const search = typeof args.search === "string" ? args.search.toLowerCase() : undefined;
+        // What a search matches, and in what order, is decided by `searchTasks`
+        // so that the app's search box and this tool cannot disagree. A blank
+        // search is no search: it used to match every title, and an agent that
+        // passes an empty string should still get the unfiltered list rather
+        // than nothing.
+        const ranked =
+          typeof args.search === "string" && args.search.trim() !== ""
+            ? searchTasks(context.store, args.search)
+            : null;
 
-        const tasks = context.store
-          .all("task")
-          .filter((task) => {
-            if (!(args.includeCompleted === true) && task.isCompleted) return false;
-            if (typeof args.projectId === "string" && task.projectId !== args.projectId) return false;
-            if (typeof args.sectionId === "string" && task.sectionId !== args.sectionId) return false;
-            if (labelId !== undefined && !task.labelIds.includes(labelId)) return false;
-            if (typeof args.priority === "number" && task.priority !== args.priority) return false;
-            if (search !== undefined && !task.content.toLowerCase().includes(search)) return false;
+        const matching = (ranked ?? context.store.all("task")).filter((task) => {
+          if (!(args.includeCompleted === true) && task.isCompleted) return false;
+          if (typeof args.projectId === "string" && task.projectId !== args.projectId) return false;
+          if (typeof args.sectionId === "string" && task.sectionId !== args.sectionId) return false;
+          if (labelId !== undefined && !task.labelIds.includes(labelId)) return false;
+          if (typeof args.priority === "number" && task.priority !== args.priority) return false;
 
-            const due = task.due === null ? null : dayOf(task.due.date);
-            if (args.overdueOnly === true && (due === null || due >= today)) return false;
-            if (typeof args.dueBefore === "string" && (due === null || due > args.dueBefore)) return false;
-            if (typeof args.dueAfter === "string" && (due === null || due < args.dueAfter)) return false;
-            return true;
-          })
-          .sort((a, b) => compareOrder(a.order, b.order))
+          const due = task.due === null ? null : dayOf(task.due.date);
+          if (args.overdueOnly === true && (due === null || due >= today)) return false;
+          if (typeof args.dueBefore === "string" && (due === null || due > args.dueBefore)) return false;
+          if (typeof args.dueAfter === "string" && (due === null || due < args.dueAfter)) return false;
+          return true;
+        });
+
+        // A search keeps its ranking, so `limit` cuts the weakest matches;
+        // everything else is in list order, as before.
+        const ordered = ranked !== null ? matching : matching.sort((a, b) => compareOrder(a.order, b.order));
+        const tasks = ordered
           .slice(0, typeof args.limit === "number" ? args.limit : 100)
           .map((task) => formatTask(context, task));
 

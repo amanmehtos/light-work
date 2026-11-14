@@ -362,6 +362,36 @@ describe("list_tasks", () => {
     await seed();
     expect((await call("list_tasks", { search: "PITCH" })).structuredContent.total).toBe(1);
   });
+
+  // These three pin that the tool and the app's search box mean the same thing;
+  // the rules themselves are tested beside `searchTasks`.
+  it("also searches notes and label names, best match first", async () => {
+    const { project } = await seed();
+    await call("create_task", { projectId: project.id, content: "plain", description: "mentions the zebra" });
+    await call("create_task", { projectId: project.id, content: "tagged", labels: ["zebra"] });
+    await call("create_task", { projectId: project.id, content: "Zebra crossing" });
+
+    const found = (await call("list_tasks", { search: "zebra" })).structuredContent.tasks;
+    expect(found.map((task: { content: string }) => task.content)).toEqual([
+      "Zebra crossing",
+      "tagged",
+      "plain",
+    ]);
+  });
+
+  it("treats a blank search as no search", async () => {
+    await seed();
+    const all = (await call("list_tasks", {})).structuredContent.total;
+    expect((await call("list_tasks", { search: "  " })).structuredContent.total).toBe(all);
+  });
+
+  it("still applies its other filters to what a search finds", async () => {
+    const { project } = await seed();
+    await call("create_task", { projectId: project.id, content: "pitch again", priority: 3 });
+    // The seeded pitch is p1, the new one p3; both match the search, one the priority.
+    const found = (await call("list_tasks", { search: "pitch", priority: 3 })).structuredContent.tasks;
+    expect(found.map((task: { content: string }) => task.content)).toEqual(["pitch again"]);
+  });
 });
 
 describe("get_week_plan", () => {

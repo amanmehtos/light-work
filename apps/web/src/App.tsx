@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { compareOrder, type Priority, type Task } from "@light/core";
-import type { RescheduleTarget } from "@light/client-sdk";
+import { searchTasks, type RescheduleTarget } from "@light/client-sdk";
 import { loadSession, logout, readConsentRequest, type StoredSession } from "./auth.js";
 import { Sky, ThemeToggle, describeLight, useDiurnal, useScrolled } from "./diurnal.js";
 import { useLightWeek } from "./store-hook.js";
@@ -8,13 +8,16 @@ import { AddTask, type AddRequest } from "./components/AddTask.js";
 import { Consent } from "./components/Consent.js";
 import { Day } from "./components/Day.js";
 import { Preferences } from "./components/Preferences.js";
+import { Shortcuts } from "./components/Shortcuts.js";
 import { SignIn } from "./components/SignIn.js";
 import { Sidebar, type View } from "./components/Sidebar.js";
 import { TaskEditor } from "./components/TaskEditor.js";
 import { TaskRow } from "./components/TaskRow.js";
 import { planReorder, rowUnder } from "./reorder.js";
 import { atDay, dueDay, localDay } from "./schedule.js";
+import { isTypingTarget, moveSelection, selectionAfterRemoval, type Shortcut } from "./shortcuts.js";
 import { foldSubtasks } from "./subtasks.js";
+import { useShortcuts } from "./use-shortcuts.js";
 
 function todayISO(): string {
   // Local calendar day, which is what "Today" has to mean to a user.
@@ -76,6 +79,15 @@ function Workspace({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // What the search view is looking for. Kept here, not in the view, so that
+  // leaving and coming back (the sidebar, or `/` again) finds the last search.
+  const [query, setQuery] = useState("");
+  // Where Escape takes you back to from the search view.
+  const viewBeforeSearch = useRef<View>({ kind: "today" });
+  // A field a shortcut wants focused that is not on the page yet, because the
+  // view that holds it has not rendered. Resolved by the effect below.
+  const pendingFocus = useRef<"add" | "search" | null>(null);
   // Why the last add did not happen, when it did not. Almost always nothing.
   const [addError, setAddError] = useState<string | null>(null);
   const today = todayISO();
@@ -116,6 +128,13 @@ function Workspace({
 
     let list: Task[];
     switch (view.kind) {
+      case "search":
+        // Everything the account holds, finished work included — finding the
+        // thing you did last month is half of why anyone searches — but not the
+        // trophies when rewards are off. The order is `searchTasks`' own, which
+        // is the whole point of it being shared with the agent.
+        list = searchTasks(store, query).filter((task) => !hidden.has(task.projectId));
+        break;
       case "today":
         list = todayTasks;
         break;
@@ -142,7 +161,12 @@ function Workspace({
         break;
     }
 
-    if (view.kind !== "upcoming" && view.kind !== "completed" && view.kind !== "day") {
+    if (
+      view.kind !== "upcoming" &&
+      view.kind !== "completed" &&
+      view.kind !== "day" &&
+      view.kind !== "search"
+    ) {
       list = [...list].sort((a, b) => compareOrder(a.order, b.order));
     }
 
@@ -156,6 +180,17 @@ function Workspace({
       const folded = foldSubtasks(list, (id) => store.get("task", id));
       list = folded.tasks;
       parentTitles = folded.parentTitles;
+    }
+
+    // Unlike the filtered lists above, search does not fold subtasks away: a
+    // subtask is dropped there because its parent is on screen to stand for
+    // it, and in a search the subtask is the thing that matched. It stays, and
+    // says whose it is.
+    if (view.kind === "search") {
+      for (const task of list) {
+        const parent = task.parentId === null ? null : store.get("task", task.parentId);
+        if (parent !== null) parentTitles.set(task.id, parent.content);
+      }
     }
 
     const inbox = store.all("project").find((project) => project.isInbox);
@@ -188,7 +223,7 @@ function Workspace({
         .map((project) => ({ id: project.id, name: project.name })),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store, view, today, revision, rewardsEnabled]);
+  }, [store, view, query, today, revision, rewardsEnabled]);
 
   // The sidebar's Inbox entry and every default destination assume one exists,
   // and nothing but a Todoist import used to make it one. Waits for `ready`
@@ -227,8 +262,22 @@ function Workspace({
   }
 
   function complete(task: Task) {
-    const staged = task.isCompleted ? ops.uncompleteTask(task.id) : ops.completeTask(task.id, today);
+    if (task.isCompleted) {
+      commit(ops.uncompleteTask(task.id).ops);
+      return;
+    }
+    // The one place a task is finished from, for the checkbox and for Enter
+    // alike, so both earn the reward the same way (`Operations.completeTask`
+    // does it) and both say when a repeat could not be read. Without that, a
+    // "repeats" phrase the app cannot parse would leave a task quietly done
+    // and never coming back.
+    const staged = ops.completeTask(task.id, today);
     commit(staged.ops);
+    if (!staged.result.recurrenceUnderstood) {
+      setAddError(
+        `“${task.content}” was marked done, but its repeat could not be read, so it will not come back.`,
+      );
+    }
   }
 
   function move(task: Task, direction: -1 | 1) {
@@ -285,6 +334,138 @@ function Workspace({
     }
   }
 
+  // Every way of changing view goes through here, so that leaving for search
+  // always remembers where Escape should come back to.
+  function selectView(next: View) {
+    if (next.kind === "search" && view.kind !== "search") viewBeforeSearch.current = view;
+    setView(next);
+  }
+
+  // Focus a field by id, or arrange to once the view that holds it has drawn.
+  function focusField(which: "add" | "search") {
+    const id = which === "add" ? "add-task-content" : "search-input";
+    const field = document.getElementById(id) as HTMLInputElement | null;
+    if (field !== null && !field.disabled) {
+      field.focus();
+      // An existing search is selected, so typing replaces it and Escape and
+      // an arrow key both still leave it readable.
+      if (which === "search") field.select();
+      return;
+    }
+    pendingFocus.current = which;
+  }
+
+  useEffect(() => {
+    if (pendingFocus.current === null || !ready) return;
+    const which = pendingFocus.current;
+    const field = document.getElementById(which === "add" ? "add-task-content" : "search-input") as
+      | HTMLInputElement
+      | null;
+    if (field === null) return;
+    pendingFocus.current = null;
+    field.focus();
+    if (which === "search") field.select();
+  }, [view, ready]);
+
+  const visibleIds = visible.map((task) => task.id);
+  // Only a selection that is on screen counts. The selection survives a change
+  // of view (a click-selected row used to, too), and one that has gone off the
+  // list must not be edited or completed by a key press nobody can see land.
+  const selectedTask = visible.find((task) => task.id === selectedId) ?? null;
+
+  function select(id: string | null) {
+    setSelectedId(id);
+    if (id === null) return;
+    // `nearest`, so a row already in view does not jump; the sticky masthead
+    // is allowed for by `scroll-margin-top` on the row.
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-task-id="${CSS.escape(id)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  // The seven keys. Whether one may fire at all — not while typing, not with a
+  // sheet or menu open — has been decided before this is called; see
+  // `resolveShortcut`. This only does the thing, and says whether it did.
+  useShortcuts((shortcut: Shortcut, event, page) => {
+    switch (shortcut) {
+      case "quick-add":
+        if (!ready) return false;
+        // The day and search views have no add line. Today is the neutral
+        // place to land: a task made there goes to the inbox, as it would from
+        // any view that is not a project.
+        if (view.kind === "day" || view.kind === "search") setView({ kind: "today" });
+        focusField("add");
+        return true;
+
+      case "search":
+        selectView({ kind: "search" });
+        focusField("search");
+        return true;
+
+      case "next":
+      case "previous": {
+        const target = moveSelection(visibleIds, selectedTask?.id ?? null, shortcut === "next" ? 1 : -1);
+        if (target === null) return false;
+        // Focus goes back to the page: a button left focused on the row that
+        // was just clicked would take the next Enter for itself (see
+        // `resolveShortcut`), and Enter is meant to act on this selection.
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && active.closest(".tasks") !== null) active.blur();
+        select(target);
+        return true;
+      }
+
+      case "edit":
+        if (selectedTask === null) return false;
+        setEditingId(selectedTask.id);
+        return true;
+
+      case "complete": {
+        if (selectedTask === null) return false;
+        // The neighbour is chosen before the commit, from the list as it is
+        // now. Where the row stays (Completed, or a search, which lists
+        // finished work) the selection stays with it.
+        const staysListed = view.kind === "search" || view.kind === "completed";
+        const next = staysListed ? selectedTask.id : selectionAfterRemoval(visibleIds, selectedTask.id);
+        complete(selectedTask);
+        select(next);
+        return true;
+      }
+
+      case "help":
+        setShortcutsOpen(true);
+        return true;
+
+      case "escape": {
+        // A sheet that is open and did not hear the key (focus is outside it).
+        // One that did hear it is closing itself and never gets here.
+        if (page.sheetOpen) {
+          setEditingId(null);
+          setPreferencesOpen(false);
+          setShortcutsOpen(false);
+          return true;
+        }
+        // Then a field: let go of it, keeping what was typed. This is the one
+        // shortcut that acts on a focused field, and it takes nothing from it.
+        if (isTypingTarget(event.target)) {
+          (event.target as HTMLElement).blur();
+          return true;
+        }
+        if (selectedId !== null) {
+          setSelectedId(null);
+          return true;
+        }
+        if (view.kind === "search") {
+          setView(viewBeforeSearch.current);
+          return true;
+        }
+        return false;
+      }
+    }
+  });
+
   const project = view.kind === "project" ? store.get("project", view.projectId) : null;
 
   // Switching rewards off while looking at the trophies would otherwise leave
@@ -304,7 +485,9 @@ function Workspace({
             ? "Upcoming"
             : view.kind === "completed"
               ? "Completed"
-              : "All tasks";
+              : view.kind === "search"
+                ? "Search"
+                : "All tasks";
 
   const light = useDiurnal();
   const scrolled = useScrolled();
@@ -361,7 +544,7 @@ function Workspace({
           <Sidebar
             store={store}
             view={view}
-            onSelect={setView}
+            onSelect={selectView}
             counts={counts}
             today={today}
             rewardsEnabled={rewardsEnabled}
@@ -374,8 +557,28 @@ function Workspace({
             <p className="dn-prose project-description">{project.description}</p>
           )}
 
-          {view.kind !== "day" && (
-            <AddTask onAdd={addTask} disabled={!ready} today={today} projects={namedProjects} />
+          {view.kind === "search" ? (
+            // Plain text, not `type="search"`: WebKit and Blink clear a search
+            // input on Escape, and Escape here is meant to let go of the field
+            // and keep what was typed.
+            <div className="dn-field search-field">
+              <label className="dn-label dn-sr-only" htmlFor="search-input">
+                Search tasks
+              </label>
+              <input
+                id="search-input"
+                className="dn-input"
+                value={query}
+                disabled={!ready}
+                autoComplete="off"
+                placeholder="Search titles, notes and labels"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+          ) : (
+            view.kind !== "day" && (
+              <AddTask onAdd={addTask} disabled={!ready} today={today} projects={namedProjects} />
+            )
           )}
 
           {!ready ? (
@@ -394,7 +597,11 @@ function Workspace({
             />
           ) : visible.length === 0 ? (
             <p className="dn-hint pad">
-              {view.kind === "today"
+              {view.kind === "search"
+                ? query.trim() === ""
+                  ? "Type to search titles, notes and labels."
+                  : `Nothing matches “${query.trim()}”.`
+                : view.kind === "today"
                 ? "Nothing due today."
                 : view.kind === "upcoming"
                   ? "Nothing scheduled ahead."
@@ -429,7 +636,7 @@ function Workspace({
         </main>
       </div>
 
-      {/* Both sheets stay mounted: the library animates an element it already
+      {/* The sheets stay mounted: the library animates an element it already
           holds, so unmounting one would cost it its closing animation. */}
       <TaskEditor
         task={editingId === null ? null : store.get("task", editingId)}
@@ -439,6 +646,7 @@ function Workspace({
         rewardsEnabled={rewardsEnabled}
         onClose={() => setEditingId(null)}
       />
+      <Shortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <Preferences
         open={preferencesOpen}
         ops={ops}
