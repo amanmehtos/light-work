@@ -19,7 +19,7 @@ struct PreferencesView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
+                SwiftUI.Section {
                     Toggle("Rewards", isOn: Binding(
                         get: { model.rewardsEnabled },
                         set: { model.setRewardsEnabled($0) }))

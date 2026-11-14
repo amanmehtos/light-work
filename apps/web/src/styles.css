@@ -443,3 +443,46 @@ html, body, #root { height: 100%; }
 @media (hover: none) {
   .task .reorder { opacity: 1; pointer-events: auto; }
 }
+
+/* --- sections and subtasks ------------------------------------------- */
+
+/*
+ * The fold chevron, on a task that has subtasks and on a section heading.
+ *
+ * Quiet until it is pointed at, like the other things on a row that are not the
+ * task itself. On a row it sits in a slot of its own width whether or not the row
+ * has one, so titles line up down the list. Ink and muted ink only.
+ */
+.row-fold {
+  flex: 0 0 auto; width: 1.25rem; align-self: flex-start; margin-top: 0.125rem;
+  display: flex; justify-content: center;
+}
+.row-fold__btn {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  font: inherit; line-height: 1; color: var(--dn-muted);
+  padding: 0.25rem; margin: -0.25rem;
+}
+.row-fold__btn:hover { color: var(--dn-ink); }
+.row-fold__btn:focus-visible { outline: 2px solid var(--dn-focus); outline-offset: 2px; }
+
+/* A section: its heading, then its rows. The rule under the bar is what makes it
+   a heading rather than another row. The heading is a drop target, so it keeps
+   its full width and some height even when nothing is under it. */
+.section { margin-top: 1.5rem; }
+.section-heading__bar {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding-bottom: 0.375rem; margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--dn-line);
+}
+.section-heading__name { margin: 0; font-size: 1rem; min-width: 0; overflow-wrap: anywhere; }
+.section-heading__input { max-width: 20rem; }
+/* The notes are often the plan for the phase, so they are shown, but a long one
+   must not push the tasks off the screen. */
+.section-heading__notes {
+  margin: 0 0 0.5rem; white-space: pre-wrap;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+.add-section { margin-top: 1.25rem; }
+.add-section--open { display: flex; gap: 0.5rem; align-items: center; max-width: 24rem; }
+.add-section--open .dn-input { flex: 1; }

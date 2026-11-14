@@ -636,3 +636,88 @@ describe("projects", () => {
     expect(projects.find((p: { id: string }) => p.id === project.id).openTasks).toBe(0);
   });
 });
+
+describe("sections", () => {
+  async function sectioned() {
+    const { project, task } = await seed();
+    const section = (
+      await call("create_section", { projectId: project.id, name: "Phase one", description: "the plan" })
+    ).structuredContent.section;
+    return { project, task, section };
+  }
+
+  it("lists sections with their notes, project and open-task counts", async () => {
+    const { project, task, section } = await sectioned();
+    await call("move_task", { taskId: task.id, sectionId: section.id });
+
+    const listed = (await call("list_sections", {})).structuredContent;
+    expect(listed.total).toBe(1);
+    expect(listed.sections[0]).toMatchObject({
+      id: section.id,
+      name: "Phase one",
+      description: "the plan",
+      project: { id: project.id, path: "Develop KYC" },
+      openTasks: 1,
+    });
+  });
+
+  it("narrows to one project and hides archived sections unless asked", async () => {
+    const { project, section } = await sectioned();
+    const other = (await call("create_project", { name: "elsewhere" })).structuredContent.project;
+    await call("create_section", { projectId: other.id, name: "Else" });
+    await call("update_section", { sectionId: section.id, isArchived: true });
+
+    expect((await call("list_sections", { projectId: project.id })).structuredContent.total).toBe(0);
+    expect(
+      (await call("list_sections", { projectId: project.id, includeArchived: true })).structuredContent.total,
+    ).toBe(1);
+    expect((await call("list_sections", { projectId: other.id })).structuredContent.total).toBe(1);
+  });
+
+  it("list_sections then move_task with a sectionId is how an agent files a task", async () => {
+    const { task, section } = await sectioned();
+    const moved = await call("move_task", { taskId: task.id, sectionId: section.id });
+    expect(moved.structuredContent.task.section).toEqual({ id: section.id, name: "Phase one" });
+    expect(server.liveCount("section")).toBe(1);
+  });
+
+  it("move_task refuses a section from another project, and says why", async () => {
+    const { task } = await sectioned();
+    const other = (await call("create_project", { name: "elsewhere" })).structuredContent.project;
+    const foreign = (await call("create_section", { projectId: other.id, name: "Else" })).structuredContent
+      .section;
+
+    const response = await call("move_task", { taskId: task.id, sectionId: foreign.id });
+    expect(response.isError).toBe(true);
+    expect(response.content[0]!.text).toContain("different project");
+  });
+
+  it("renames, and leaves what it was not given alone", async () => {
+    const { section } = await sectioned();
+    const response = await call("update_section", { sectionId: section.id, name: "Phase 1" });
+    expect(response.structuredContent.section).toMatchObject({ name: "Phase 1", description: "the plan" });
+  });
+
+  it("reports an unknown section on update and on delete", async () => {
+    const update = await call("update_section", { sectionId: "ghost", name: "x" });
+    expect(update.isError).toBe(true);
+    expect(update.content[0]!.text).toContain("No section");
+
+    const remove = await call("delete_section", { sectionId: "ghost" });
+    expect(remove.isError).toBe(true);
+    expect(remove.content[0]!.text).toContain("No section");
+  });
+
+  it("delete_section keeps the tasks, and says where they went", async () => {
+    const { task, section } = await sectioned();
+    await call("move_task", { taskId: task.id, sectionId: section.id });
+
+    const response = await call("delete_section", { sectionId: section.id });
+
+    expect(response.structuredContent).toMatchObject({ deleted: section.id, movedTasks: 1 });
+    expect(server.liveCount("section")).toBe(0);
+    expect(server.liveCount("task")).toBe(1);
+    const kept = (await call("get_task", { taskId: task.id })).structuredContent.task;
+    expect(kept.section).toBeUndefined();
+  });
+});

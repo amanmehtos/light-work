@@ -62,6 +62,81 @@ export function planReorder(
   return { afterId };
 }
 
+/**
+ * The id of the row beside `movedId` that shares its list, or null at the edge.
+ *
+ * What the ↑/↓ buttons step over. With subtasks drawn indented, the row below a
+ * parent is usually its first child, which is not a sibling and not somewhere
+ * the parent can land after; the same goes for the first row of the next section.
+ * The neighbour is the nearest row in that direction in the same list, however
+ * many rows of other lists are between.
+ */
+export function neighbour(
+  visible: readonly Task[],
+  movedId: string,
+  direction: -1 | 1,
+): string | null {
+  const moved = visible.find((task) => task.id === movedId);
+  if (moved === undefined) return null;
+  const list = visible.filter((task) => sameList(task, moved));
+  const at = list.findIndex((task) => task.id === movedId);
+  return list[at + direction]?.id ?? null;
+}
+
+/**
+ * Where a row dropped on a row in *another section* goes: into that section,
+ * beside the row it was dropped on.
+ *
+ * `planReorder` refuses this on purpose — an order key means something only
+ * among tasks that share a section — so a drop across a heading is a different
+ * act: a move (`moveTask`, which lands the task last in the section) followed by
+ * a reorder to put it where it was dropped. The caller stages both, so one
+ * gesture is one commit.
+ *
+ * Only root rows in the same project: a subtask moves with its parent and is not
+ * dropped into a section by itself, and a row dropped on one from another
+ * project has no section of this project to land in.
+ *
+ * `known` is the sections that exist. A task naming one that does not is drawn
+ * with the unsectioned rows (see `groupBySection`) and is treated as unsectioned
+ * here too, so that what the drop does matches what is on the screen.
+ */
+export function planSectionMove(
+  visible: readonly Task[],
+  movedId: string,
+  targetId: string,
+  side: Side,
+  known: ReadonlySet<string>,
+): { sectionId: string | null; afterId: string | null } | null {
+  if (movedId === targetId) return null;
+  const moved = visible.find((task) => task.id === movedId);
+  const target = visible.find((task) => task.id === targetId);
+  if (moved === undefined || target === undefined) return null;
+  if (moved.parentId !== null || target.parentId !== null) return null;
+  if (moved.projectId !== target.projectId) return null;
+
+  const placed = (task: Task): string | null =>
+    task.sectionId !== null && known.has(task.sectionId) ? task.sectionId : null;
+  const into = placed(target);
+  if (placed(moved) === into) return null;
+
+  const list = visible.filter(
+    (task) => task.parentId === null && task.projectId === target.projectId && placed(task) === into,
+  );
+  const at = list.findIndex((task) => task.id === targetId);
+  return { sectionId: into, afterId: side === "after" ? targetId : (list[at - 1]?.id ?? null) };
+}
+
+/** The section heading under a point, or null. A heading is a drop target; see `Operations.moveTask`. */
+export function headingUnder(
+  x: number,
+  y: number,
+  doc: Pick<Document, "elementFromPoint"> = document,
+): string | null {
+  const heading = doc.elementFromPoint(x, y)?.closest<HTMLElement>("[data-section-id]");
+  return heading?.dataset.sectionId ?? null;
+}
+
 /** The half of `rect` the pointer is on. Exported with the rest so it is testable without a DOM. */
 export function sideOf(pointerY: number, top: number, height: number): Side {
   return pointerY < top + height / 2 ? "before" : "after";

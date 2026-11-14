@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { compareOrder, type Priority, type Task } from "@light/core";
+import { compareOrder, type Op, type Priority, type Section, type Task } from "@light/core";
 import { searchTasks, type RescheduleTarget } from "@light/client-sdk";
 import { loadSession, logout, readConsentRequest, type StoredSession } from "./auth.js";
 import { Sky, ThemeToggle, describeLight, useDiurnal, useScrolled } from "./diurnal.js";
@@ -10,13 +10,16 @@ import { Day } from "./components/Day.js";
 import { Preferences } from "./components/Preferences.js";
 import { Shortcuts } from "./components/Shortcuts.js";
 import { SignIn } from "./components/SignIn.js";
+import { AddSection } from "./components/AddSection.js";
+import { SectionHeading } from "./components/SectionHeading.js";
 import { Sidebar, type View } from "./components/Sidebar.js";
 import { TaskEditor } from "./components/TaskEditor.js";
 import { TaskRow } from "./components/TaskRow.js";
-import { planReorder, rowUnder } from "./reorder.js";
+import { headingUnder, neighbour, planReorder, planSectionMove, rowUnder } from "./reorder.js";
 import { atDay, dueDay, localDay } from "./schedule.js";
 import { isTypingTarget, moveSelection, selectionAfterRemoval, type Shortcut } from "./shortcuts.js";
-import { foldSubtasks } from "./subtasks.js";
+import { groupBySection, onPage, type Group } from "./sections.js";
+import { arrangeSubtasks, descendantIds, flatRows, indexTasks, type Row } from "./subtasks.js";
 import { useShortcuts } from "./use-shortcuts.js";
 
 function todayISO(): string {
@@ -98,7 +101,7 @@ function Workspace({
 
   // `revision` is the dependency that matters: the store lives outside React,
   // so this recomputes when it changes rather than when props do.
-  const { visible, parentTitles, counts, inboxProjectId, namedProjects } = useMemo(() => {
+  const { rows, groups, visibleRows, sectionIds, counts, inboxProjectId, namedProjects } = useMemo(() => {
     // With rewards off the project and its contents go quiet together —
     // leaving the trophies loose in Today would be the opposite of hiding it.
     const hidden = new Set(
@@ -111,6 +114,7 @@ function Workspace({
     );
 
     const all = store.all("task").filter((task) => !hidden.has(task.projectId));
+    const index = indexTasks(all);
     const open = all.filter((task) => !task.isCompleted);
     const completed = all.filter((task) => task.isCompleted);
     // Through `dueDay`, not off the front of the string: a timed task stores
@@ -152,7 +156,10 @@ function Workspace({
         );
         break;
       case "project":
-        list = open.filter((task) => task.projectId === view.projectId && task.parentId === null);
+        // Every open task, subtasks included: they are drawn beneath their
+        // parents by `arrangeSubtasks`. This used to keep only the roots, which
+        // left the sidebar's count for the project larger than what it listed.
+        list = open.filter((task) => task.projectId === view.projectId);
         break;
       case "day":
         // The day view reads the store itself, because what it needs — timed
@@ -170,44 +177,52 @@ function Workspace({
       list = [...list].sort((a, b) => compareOrder(a.order, b.order));
     }
 
-    // The three views that are filters over everything share one rule for
-    // subtasks; the others are already scoped (a project lists its roots) or are
-    // a record rather than a plan (Completed).
-    const fold = (tasks: Task[]) => foldSubtasks(tasks, (id) => store.get("task", id)).tasks;
+    // One rule for subtasks, in every view that is a plan (see `subtasks.ts`):
+    // a subtask is drawn beneath its parent when the parent is in the list, and
+    // stands alone, naming its parent, when it is not. Completed is a record and
+    // search finds the subtask itself, so those two stay flat.
+    const flat = view.kind === "search" || view.kind === "completed";
+    const rows: Row[] =
+      view.kind === "day" ? [] : flat ? flatRows(list, index) : arrangeSubtasks(list, index);
 
-    let parentTitles = new Map<string, string>();
-    if (view.kind === "today" || view.kind === "upcoming" || view.kind === "all") {
-      const folded = foldSubtasks(list, (id) => store.get("task", id));
-      list = folded.tasks;
-      parentTitles = folded.parentTitles;
-    }
+    // Sections only mean something inside one project.
+    const groups: Group[] | null =
+      view.kind === "project"
+        ? groupBySection(
+            rows,
+            store.all("section").filter((section) => section.projectId === view.projectId),
+          )
+        : null;
+    const visibleRows = groups !== null ? onPage(groups) : rows.filter((row) => !row.hidden);
 
-    // Unlike the filtered lists above, search does not fold subtasks away: a
-    // subtask is dropped there because its parent is on screen to stand for
-    // it, and in a search the subtask is the thing that matched. It stays, and
-    // says whose it is.
-    if (view.kind === "search") {
-      for (const task of list) {
-        const parent = task.parentId === null ? null : store.get("task", task.parentId);
-        if (parent !== null) parentTitles.set(task.id, parent.content);
-      }
-    }
+    // What is on the page, in the order it is on the page: this is what `j` and
+    // `k` walk, so a row inside a folded parent or a folded section is not
+    // selectable — there is nothing there to select.
+    const sectionIds = new Set(
+      groups === null ? [] : groups.flatMap((group) => (group.section === null ? [] : [group.section.id])),
+    );
 
     const inbox = store.all("project").find((project) => project.isInbox);
 
+    // The length of the arrangement, not of the list it was made from. Today
+    // that is the same number, because an arrangement never drops a task — and
+    // counting through it is what keeps it true if that ever stops being so.
+    // The sidebar shows all four at once while only one is the view being
+    // rendered, so each is arranged on its own. A folded parent hides rows but
+    // not tasks: the count does not move when a chevron does, and the parent's
+    // `2/5` chip says what is inside. Completed does not nest, so it is the
+    // plain length.
+    const counted = (tasks: Task[]) => arrangeSubtasks(tasks, index).length;
+
     return {
-      visible: list,
-      parentTitles,
+      rows,
+      groups,
+      visibleRows,
+      sectionIds,
       counts: {
-        // Counted after folding, and each list folded on its own, because the
-        // sidebar shows all four at once while only one of them is the view
-        // being rendered. Counting the unfolded list instead would put "5"
-        // beside three rows the moment an account had a subtask — which reads
-        // as the app having lost two tasks, not as a subtlety about nesting.
-        // Completed is not folded, so it is not counted that way either.
-        today: fold(todayTasks).length,
-        upcoming: fold(upcoming).length,
-        all: fold(open).length,
+        today: counted(todayTasks),
+        upcoming: counted(upcoming),
+        all: counted(open),
         completed: completed.length,
       },
       // No fall back to "whichever project is first": a task with nowhere said
@@ -280,19 +295,21 @@ function Workspace({
     }
   }
 
+  // What is on the page, as tasks. Every reordering below reads this and not the
+  // list the view was made from: a row folded away cannot be dropped on, and a
+  // row's neighbour is the one beside it on the screen.
+  const visible = visibleRows.map((row) => row.task);
+
   function move(task: Task, direction: -1 | 1) {
-    const siblings = visible;
-    const index = siblings.findIndex((candidate) => candidate.id === task.id);
-    const targetIndex = index + direction;
-    if (index === -1 || targetIndex < 0 || targetIndex >= siblings.length) return;
-
-    // Moving down means landing after the sibling currently below; moving up
-    // means landing after the one two places above, or at the head.
-    const afterId =
-      direction === 1 ? siblings[targetIndex]!.id : (siblings[targetIndex - 1]?.id ?? null);
-
+    // The neighbour that shares the row's list — same project, section and
+    // parent. With subtasks indented under their parents the row below is as
+    // often a child as a sibling, and a child is not somewhere to land after.
+    const beside = neighbour(visible, task.id, direction);
+    if (beside === null) return;
+    const plan = planReorder(visible, task.id, beside, direction === 1 ? "after" : "before");
+    if (plan === null) return;
     try {
-      commit(ops.reorderTask(task.id, afterId).ops);
+      commit(ops.reorderTask(task.id, plan.afterId).ops);
     } catch {
       // Tasks in a filtered view are not necessarily siblings; reordering is
       // only meaningful inside a project list.
@@ -323,15 +340,104 @@ function Workspace({
 
   function drop(task: Task, event: PointerEvent) {
     const over = rowUnder(event.clientX, event.clientY);
-    if (over === null) return;
-    const plan = planReorder(visible, task.id, over.id, over.side);
-    if (plan === null) return;
-    try {
-      commit(ops.reorderTask(task.id, plan.afterId).ops);
-    } catch {
-      // `planReorder` only names siblings, so this is a task that vanished
-      // mid-drag; there is nothing to undo.
+    if (over === null) {
+      // Not over a row: a section heading is the other thing a task can be let
+      // go on. Filing is `moveTask`, which lands it last in the section.
+      const heading = headingUnder(event.clientX, event.clientY);
+      if (heading !== null) moveToSection(task, heading);
+      return;
     }
+
+    const plan = planReorder(visible, task.id, over.id, over.side);
+    if (plan !== null) {
+      try {
+        commit(ops.reorderTask(task.id, plan.afterId).ops);
+      } catch {
+        // `planReorder` only names siblings, so this is a task that vanished
+        // mid-drag; there is nothing to undo.
+      }
+      return;
+    }
+
+    // Not a sibling, but perhaps a row in another section: that is a move into
+    // it, positioned beside the row that was dropped on. Both ops in one commit,
+    // so the task is never seen in the new section at the wrong place.
+    const across = planSectionMove(visible, task.id, over.id, over.side, sectionIds);
+    if (across === null) return;
+    let moved: Op[];
+    try {
+      moved = ops.moveTask(task.id, { sectionId: across.sectionId }).ops;
+    } catch {
+      // A section that vanished mid-drag. `moveTask` checks before it writes,
+      // so nothing was staged.
+      return;
+    }
+    // The move is already applied to the local store, so it is committed
+    // whatever happens next; a reorder that cannot place it leaves it last in
+    // the section, which is where `moveTask` put it.
+    let placed: Op[] = [];
+    try {
+      placed = ops.reorderTask(task.id, across.afterId).ops;
+    } catch {
+      // The row it was dropped beside went away mid-drag.
+    }
+    commit([...moved, ...placed]);
+  }
+
+  function moveToSection(task: Task, sectionId: string) {
+    // A subtask is filed by its parent: drawn beneath it, moved with it. Giving
+    // it a section of its own would put it in two places at once.
+    if (task.parentId !== null || task.sectionId === sectionId) return;
+    try {
+      commit(ops.moveTask(task.id, { sectionId }).ops);
+    } catch {
+      // A section from another project, or one deleted mid-drag.
+    }
+  }
+
+  /* ---------------------------- structure ---------------------------- */
+
+  function toggleTask(row: Row) {
+    const folding = !row.task.isCollapsed;
+    commit(ops.setCollapsed("task", row.task.id, folding).ops);
+    // A selection that was inside what has just been folded away would be left
+    // pointing at nothing on the page. It moves up to the row that was folded.
+    if (folding && selectedId !== null && descendantIds(rows, row.task.id).has(selectedId)) {
+      setSelectedId(row.task.id);
+    }
+  }
+
+  function toggleSection(section: Section, group: Group) {
+    const folding = !section.isCollapsed;
+    commit(ops.setCollapsed("section", section.id, folding).ops);
+    if (folding && selectedId !== null && group.rows.some((row) => row.task.id === selectedId)) {
+      setSelectedId(null);
+    }
+  }
+
+  function shiftSection(section: Section, direction: -1 | 1) {
+    if (groups === null) return;
+    const shown = groups.flatMap((group) => (group.section === null ? [] : [group.section]));
+    const at = shown.findIndex((candidate) => candidate.id === section.id);
+    const afterId = direction === 1 ? shown[at + 1]?.id : (shown[at - 2]?.id ?? null);
+    if (at === -1 || afterId === undefined) return;
+    try {
+      commit(ops.reorderSection(section.id, afterId).ops);
+    } catch {
+      // A neighbour deleted on another device since this was drawn.
+    }
+  }
+
+  function removeSection(section: Section) {
+    // The tasks are safe whichever way this goes; what the section alone holds
+    // is its notes, and those are the one thing worth a second look.
+    if (
+      section.description.trim() !== "" &&
+      !window.confirm(`Delete “${section.name}”? Its tasks stay; its notes will be lost.`)
+    ) {
+      return;
+    }
+    commit(ops.deleteSection(section.id).ops);
   }
 
   // Every way of changing view goes through here, so that leaving for search
@@ -489,6 +595,58 @@ function Workspace({
                 ? "Search"
                 : "All tasks";
 
+  function addSection(projectId: string, name: string) {
+    commit(ops.createSection({ projectId, name }).ops);
+  }
+
+  // Move up / move down, offered only where there is somewhere to move to.
+  function sectionMoves(section: Section): { onMoveUp?: () => void; onMoveDown?: () => void } {
+    const shown = (groups ?? []).flatMap((group) => (group.section === null ? [] : [group.section]));
+    const at = shown.findIndex((candidate) => candidate.id === section.id);
+    return {
+      ...(at > 0 ? { onMoveUp: () => shiftSection(section, -1) } : {}),
+      ...(at !== -1 && at < shown.length - 1 ? { onMoveDown: () => shiftSection(section, 1) } : {}),
+    };
+  }
+
+  // Search and Completed do not nest; every other list does.
+  const nests = view.kind !== "search" && view.kind !== "completed";
+
+  function renderRow(row: Row) {
+    const task = row.task;
+    return (
+      <TaskRow
+        key={task.id}
+        task={task}
+        store={store}
+        ops={ops}
+        today={today}
+        parentTitle={row.parentTitle}
+        {...(nests
+          ? {
+              structure: {
+                depth: row.depth,
+                subtasks: row.subtasks,
+                hasChildren: row.hasChildren,
+                collapsed: row.collapsed,
+                onToggle: () => toggleTask(row),
+              },
+            }
+          : {})}
+        selected={selectedId === task.id}
+        onComplete={() => complete(task)}
+        onSelect={() => setSelectedId(selectedId === task.id ? null : task.id)}
+        onEdit={() => setEditingId(task.id)}
+        onMoveUp={() => move(task, -1)}
+        onMoveDown={() => move(task, 1)}
+        onReschedule={(target) => reschedule(task, target)}
+        onPickDay={(day) => pickDay(task, day)}
+        onPriority={(priority) => setPriority(task, priority)}
+        {...(reorderable ? { onDrop: (event: PointerEvent) => drop(task, event) } : {})}
+      />
+    );
+  }
+
   const light = useDiurnal();
   const scrolled = useScrolled();
 
@@ -595,43 +753,52 @@ function Workspace({
               onOpen={(task) => setEditingId(task.id)}
               onComplete={complete}
             />
-          ) : visible.length === 0 ? (
-            <p className="dn-hint pad">
-              {view.kind === "search"
-                ? query.trim() === ""
-                  ? "Type to search titles, notes and labels."
-                  : `Nothing matches “${query.trim()}”.`
-                : view.kind === "today"
-                ? "Nothing due today."
-                : view.kind === "upcoming"
-                  ? "Nothing scheduled ahead."
-                  : view.kind === "completed"
-                    ? "Nothing finished yet."
-                    : "No tasks here yet."}
-            </p>
+          ) : rows.length === 0 && (groups === null || sectionIds.size === 0) ? (
+            <>
+              <p className="dn-hint pad">
+                {view.kind === "search"
+                  ? query.trim() === ""
+                    ? "Type to search titles, notes and labels."
+                    : `Nothing matches “${query.trim()}”.`
+                  : view.kind === "today"
+                    ? "Nothing due today."
+                    : view.kind === "upcoming"
+                      ? "Nothing scheduled ahead."
+                      : view.kind === "completed"
+                        ? "Nothing finished yet."
+                        : "No tasks here yet."}
+              </p>
+              {view.kind === "project" && <AddSection onAdd={(name) => addSection(view.projectId, name)} />}
+            </>
+          ) : groups === null ? (
+            <ul className="tasks">{rows.filter((row) => !row.hidden).map(renderRow)}</ul>
           ) : (
-            <ul className="tasks">
-              {visible.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  store={store}
-                  ops={ops}
-                  today={today}
-                  parentTitle={parentTitles.get(task.id) ?? null}
-                  selected={selectedId === task.id}
-                  onComplete={() => complete(task)}
-                  onSelect={() => setSelectedId(selectedId === task.id ? null : task.id)}
-                  onEdit={() => setEditingId(task.id)}
-                  onMoveUp={() => move(task, -1)}
-                  onMoveDown={() => move(task, 1)}
-                  onReschedule={(target) => reschedule(task, target)}
-                  onPickDay={(day) => pickDay(task, day)}
-                  onPriority={(priority) => setPriority(task, priority)}
-                  {...(reorderable ? { onDrop: (event: PointerEvent) => drop(task, event) } : {})}
-                />
-              ))}
-            </ul>
+            <>
+              {groups.map((group) =>
+                group.section === null ? (
+                  group.rows.length > 0 && (
+                    <ul className="tasks" key="root">
+                      {group.rows.filter((row) => !row.hidden).map(renderRow)}
+                    </ul>
+                  )
+                ) : (
+                  <section className="section" key={group.section.id}>
+                    <SectionHeading
+                      section={group.section}
+                      count={group.rows.length}
+                      onToggle={() => toggleSection(group.section!, group)}
+                      onRename={(name) => commit(ops.updateSection(group.section!.id, { name }).ops)}
+                      onDelete={() => removeSection(group.section!)}
+                      {...sectionMoves(group.section)}
+                    />
+                    {!group.section.isCollapsed && group.rows.length > 0 && (
+                      <ul className="tasks">{group.rows.filter((row) => !row.hidden).map(renderRow)}</ul>
+                    )}
+                  </section>
+                ),
+              )}
+              {view.kind === "project" && <AddSection onAdd={(name) => addSection(view.projectId, name)} />}
+            </>
           )}
         </main>
       </div>

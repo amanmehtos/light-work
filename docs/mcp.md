@@ -88,6 +88,7 @@ It refuses to start on a bad token rather than failing on the first tool call.
 | `list_projects` | ✓ | Projects with full nested paths and open-task counts |
 | `list_tasks` | ✓ | Filter by project, section, label, priority, due window, text |
 | `get_task` | ✓ | One task, its subtasks, and its accumulated focus time |
+| `list_sections` | ✓ | Sections in display order, with their notes and open-task counts |
 | `list_labels` | ✓ | Labels with open-task counts |
 | `get_week_plan` | ✓ | The whole picture for a window, in one call |
 | `get_focus_stats` | ✓ | Where attention actually went |
@@ -97,11 +98,13 @@ It refuses to start on a bad token rather than failing on the first tool call.
 | `reschedule_task` | | Today / tomorrow / next week / weekend / none; the same rule the apps use |
 | `complete_task` | | Reschedules instead, when the task recurs |
 | `delete_task` | | Cascades to subtasks |
-| `move_task` | | Between projects, sections, parents |
+| `move_task` | | Between projects, sections, parents; subtasks come with it |
 | `reorder_tasks` | | Full desired order of a sibling list |
 | `create_project` | | |
 | `delete_project` | | Sections and tasks go too; child projects only with `recursive` |
 | `create_section` | | |
+| `update_section` | | Rename, rewrite the notes, archive |
+| `delete_section` | | The tasks stay: they move to the project's top level |
 | `log_focus_session` | | Backfill a session that happened away from the timer |
 
 ### `get_week_plan` is the one that matters

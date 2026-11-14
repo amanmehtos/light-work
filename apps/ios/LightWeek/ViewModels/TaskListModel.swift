@@ -34,8 +34,28 @@ final class TaskListModel: ObservableObject {
         var focusedSeconds: Int = 0
     }
 
+    /// One row of the list as it is drawn: the task and what it needs, beside
+    /// where it sits among its subtasks.
+    struct Entry: Identifiable {
+        var row: Row
+        var outline: Outline.Row
+
+        var id: String { row.id }
+    }
+
+    /// A run of entries under one section heading, or the ones above the first.
+    /// `section` is nil for the unsectioned rows, and for a list that is not one
+    /// project's, which has no headings at all.
+    struct Block: Identifiable {
+        var section: LightKit.Section?
+        var entries: [Entry]
+
+        var id: String { section?.id ?? "" }
+    }
+
     @Published private(set) var rows: [Row] = []
     @Published private(set) var projects: [Project] = []
+    @Published private(set) var sections: [LightKit.Section] = []
     @Published private(set) var labels: [Label] = []
     /// On unless it has been switched off. The default lives in one place.
     @Published private(set) var rewardsEnabled = true
@@ -65,6 +85,7 @@ final class TaskListModel: ObservableObject {
             rows = []
             all = []
             projects = []
+            sections = []
             return
         }
         isLoading = true
@@ -83,6 +104,7 @@ final class TaskListModel: ObservableObject {
 
     private func apply(_ snapshot: LightWeekClient.Snapshot) {
         projects = snapshot.entities.project ?? []
+        sections = snapshot.entities.section ?? []
         labels = snapshot.entities.label ?? []
         all = snapshot.entities.task ?? []
         rewardsEnabled = (snapshot.entities.preference ?? [])
@@ -144,6 +166,37 @@ final class TaskListModel: ObservableObject {
     var completedRows: [Row] {
         rows.filter(\.task.isCompleted)
             .sorted { ($0.task.completedAt ?? "") > ($1.task.completedAt ?? "") }
+    }
+
+    /// The open tasks, arranged for the screen: subtasks beneath their parents
+    /// and, inside one project, under their section headings.
+    ///
+    /// Everything about *what the arrangement is* lives in `Outline`, the twin of
+    /// the web's, so the two clients cannot read the same account differently.
+    /// This only attaches the rest of what a row needs. `project` is nil for the
+    /// whole-account list, which spans projects and so has no headings.
+    func blocks(in project: Project?) -> [Block] {
+        let open = openRows
+        let scoped = project.map { project in open.filter { $0.task.projectId == project.id } } ?? open
+        let byId = Dictionary(scoped.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let arranged = Outline.arrange(scoped.map(\.task), among: all)
+
+        func entries(_ rows: [Outline.Row]) -> [Entry] {
+            rows.compactMap { outline in byId[outline.id].map { Entry(row: $0, outline: outline) } }
+        }
+
+        guard let project else { return [Block(section: nil, entries: entries(arranged))] }
+        return Outline
+            .groups(arranged, sections: sections.filter { $0.projectId == project.id })
+            .map { Block(section: $0.section, entries: entries($0.rows)) }
+    }
+
+    /// Completed tasks as one block, flat: a record of what was done, not a plan,
+    /// so nothing nests and nothing is folded.
+    func completedBlocks() -> [Block] {
+        [Block(section: nil, entries: completedRows.map {
+            Entry(row: $0, outline: Outline.flat($0.task))
+        })]
     }
 
     /// The open tasks on a given day, split into the timed and the waiting —
@@ -297,6 +350,32 @@ final class TaskListModel: ObservableObject {
                 self.all.removeAll { gone.contains($0.id) }
                 self.rebuild()
                 return deletion.ops
+            }
+        }
+    }
+
+    /// Folds or unfolds a task's subtasks. Synced: it is the same flag the web
+    /// writes, so a task folded there is folded here and the reverse.
+    func setCollapsed(_ task: LightKit.Task, _ collapsed: Bool) {
+        _Concurrency.Task {
+            await write { operations in
+                let folded = operations.setCollapsed(task, collapsed)
+                self.replace(folded.task)
+                return folded.ops
+            }
+        }
+    }
+
+    /// Folds or unfolds a section. The one thing about a section this client
+    /// writes; making, renaming and deleting them stay on the web.
+    func setCollapsed(_ section: LightKit.Section, _ collapsed: Bool) {
+        _Concurrency.Task {
+            await write { operations in
+                let folded = operations.setCollapsed(section, collapsed)
+                if let index = self.sections.firstIndex(where: { $0.id == section.id }) {
+                    self.sections[index] = folded.section
+                }
+                return folded.ops
             }
         }
     }

@@ -59,10 +59,9 @@ public struct Operations: Sendable {
     /// Every field of a task, `null` where there is nothing.
     ///
     /// Encoding a `Task` will not do. Swift's `Codable` omits an optional left
-    /// nil, and `Task` does not carry `dayOrder`, `isCollapsed` or the
-    /// assignee fields at all — so the patch would arrive missing keys, and
-    /// the web reads a missing `parentId` as "not null", which hides the task
-    /// from its project list. That is not hypothetical: it is how a reward
+    /// nil, and `Task` does not carry the assignee fields at all — so the patch
+    /// would arrive missing keys, and the web reads a missing `parentId` as
+    /// "not null", which hides the task from its project list. That is not hypothetical: it is how a reward
     /// earned on the phone became invisible in the web's Rewards project.
     ///
     /// One place rather than two, because this has now been got wrong once and
@@ -82,7 +81,7 @@ public struct Operations: Sendable {
             "description": .string(task.description),
             "priority": .integer(task.priority.rawValue),
             "order": .string(task.order),
-            "dayOrder": .null,
+            "dayOrder": task.dayOrder.map { JSONValue.string($0) } ?? .null,
             "due": optional(task.due),
             "deadline": optional(task.deadline),
             "duration": optional(task.duration),
@@ -90,7 +89,7 @@ public struct Operations: Sendable {
             "reward": task.reward.map { JSONValue.string($0) } ?? .null,
             "isCompleted": .bool(task.isCompleted),
             "completedAt": task.completedAt.map { JSONValue.string($0) } ?? .null,
-            "isCollapsed": .bool(false),
+            "isCollapsed": .bool(task.isCollapsed),
             "assigneeId": .null,
             "addedById": .null,
             "createdAt": .string(task.createdAt),
@@ -101,9 +100,8 @@ public struct Operations: Sendable {
     /// the web would have put it.
     ///
     /// The op names every field, `null` where there is nothing — not only the
-    /// ones that have a value. `Task` here has no `dayOrder`, `isCollapsed` or
-    /// the assignee fields, and encoding it would simply omit those and every
-    /// optional left nil. The web reads a missing `parentId` as "not null",
+    /// ones that have a value. Encoding a `Task` would omit every optional left
+    /// nil and the assignee fields, which it does not carry. The web reads a missing `parentId` as "not null",
     /// which hides the task from its project list, so the patch is spelled out
     /// the way `createTask` writes it.
     public func create(
@@ -315,8 +313,8 @@ public struct Operations: Sendable {
     /// and it would vanish from both lists. So the task lands outside any
     /// section and without a parent, and its subtasks come with it — they get
     /// the new project and keep their parent, which is now beside them. The
-    /// web's version of this is the editor's project field; making that agree is
-    /// a structural change for the sections and subtasks phase.
+    /// web's project move does the same: a change of project clears the section
+    /// and the parent unless it is told otherwise, and takes the subtasks along.
     ///
     /// Moving to the project it is already in writes nothing.
     public func move(_ task: Task, to projectId: String, among tasks: [Task]) -> Move {
@@ -358,6 +356,34 @@ public struct Operations: Sendable {
         follow(task.id)
 
         return Move(tasks: changed, ops: ops)
+    }
+
+    // MARK: - Folding
+
+    /// Folds or unfolds a task's subtasks.
+    ///
+    /// Sparse: only `isCollapsed` is written, so this cannot clobber an edit to
+    /// any other field of the task from another device — which is why it does not
+    /// go through `taskFields`, and need not. (A whole-task write must; this is
+    /// not one.) A write of the value it already has is not a write: it would
+    /// sync for nothing.
+    public func setCollapsed(_ task: Task, _ collapsed: Bool) -> (task: Task, ops: [Op]) {
+        guard task.isCollapsed != collapsed else { return (task, []) }
+        var folded = task
+        folded.isCollapsed = collapsed
+        return (folded, [op(kind: "task", id: task.id,
+                            fields: .object(["isCollapsed": .bool(collapsed)]))])
+    }
+
+    /// Folds or unfolds a section. Synced, like a task's: a section collapsed on
+    /// the laptop is collapsed here. Folding is the one thing about a section
+    /// this client writes; making, renaming and deleting them stay on the web.
+    public func setCollapsed(_ section: Section, _ collapsed: Bool) -> (section: Section, ops: [Op]) {
+        guard section.isCollapsed != collapsed else { return (section, []) }
+        var folded = section
+        folded.isCollapsed = collapsed
+        return (folded, [op(kind: "section", id: section.id,
+                            fields: .object(["isCollapsed": .bool(collapsed)]))])
     }
 
     // MARK: - Finishing

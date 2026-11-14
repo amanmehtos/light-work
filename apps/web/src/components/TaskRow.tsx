@@ -105,12 +105,31 @@ const PRIORITIES: Priority[] = [1, 2, 3, 4];
  */
 const NO_DRAG = "[data-no-drag]";
 
+/**
+ * Where a row sits among its subtasks, for the views that nest them.
+ *
+ * Absent in a list that does not (Completed, search), where there is no slot for
+ * the chevron and nothing is indented. The chevron is a control of its own — it
+ * is `data-no-drag`, like the checkbox, or pressing it would start dragging the
+ * row.
+ */
+export interface Structure {
+  depth: number;
+  /** Finished over all, among direct subtasks; null for a task that has none. */
+  subtasks: { done: number; total: number } | null;
+  /** Whether there is anything in this list to fold. */
+  hasChildren: boolean;
+  collapsed: boolean;
+  onToggle: () => void;
+}
+
 export function TaskRow({
   task,
   store,
   ops,
   today,
   parentTitle = null,
+  structure,
   selected,
   onComplete,
   onSelect,
@@ -126,8 +145,9 @@ export function TaskRow({
   store: LightStore;
   ops: Operations;
   today: string;
-  /** Set when this is a subtask shown away from its parent; see `foldSubtasks`. */
+  /** Set when this is a subtask shown away from its parent; see `arrangeSubtasks`. */
   parentTitle?: string | null;
+  structure?: Structure;
   selected: boolean;
   onComplete: () => void;
   onSelect: () => void;
@@ -175,6 +195,29 @@ export function TaskRow({
         // A mouse can take the row anywhere that is not a control.
         <span className="row-grip" aria-hidden="true" title="Drag to reorder">
           ⋮⋮
+        </span>
+      )}
+
+      {structure !== undefined && (
+        // A slot on every row, so titles line up whether or not a row has a
+        // chevron. The glyph says what a press will do, not what is true: a
+        // folded row shows "▸" (open it), an open one "▾" (fold it).
+        <span className="row-fold" data-no-drag>
+          {structure.hasChildren && (
+            <button
+              type="button"
+              className="row-fold__btn"
+              aria-expanded={!structure.collapsed}
+              aria-label={`${structure.collapsed ? "Show" : "Hide"} subtasks of ${task.content}`}
+              onClick={(event) => {
+                // The body selects on click; this is not a click on the body.
+                event.stopPropagation();
+                structure.onToggle();
+              }}
+            >
+              {structure.collapsed ? "▸" : "▾"}
+            </button>
+          )}
         </span>
       )}
 
@@ -259,6 +302,17 @@ export function TaskRow({
 
           {/* Outlined, so a deadline never reads as the same kind of thing
               as the due date sitting next to it. */}
+          {/* How far through the task's own subtasks, whether or not they are
+              showing: folded, this is all the row has to say what is inside. */}
+          {structure?.subtasks != null && (
+            <span
+              className="dn-badge dn-badge--outline"
+              title={`${structure.subtasks.done} of ${structure.subtasks.total} subtasks done`}
+            >
+              {structure.subtasks.done}/{structure.subtasks.total}
+            </span>
+          )}
+
           {task.deadline !== null && (
             <span className="dn-badge dn-badge--outline" title="Deadline — when this is actually owed">
               due by {formatDay(task.deadline.date, today)}
@@ -354,7 +408,15 @@ export function TaskRow({
   const className = `dn-row task${selected ? " selected" : ""}`;
 
   return (
-    <li data-task-id={task.id}>
+    // Indented by depth. On the `li`, not the card: the card is what a drag
+    // moves, and `rowUnder` reads the `li`, so the indent is part of where the
+    // row is rather than something the drag has to carry.
+    <li
+      data-task-id={task.id}
+      {...(structure !== undefined && structure.depth > 0
+        ? { style: { marginLeft: `${structure.depth * 1.75}rem` } }
+        : {})}
+    >
       {onDrop === undefined ? (
         <div className={`dn-card ${className}`}>{card}</div>
       ) : (

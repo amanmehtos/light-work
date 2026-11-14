@@ -89,6 +89,22 @@ export function formatProject(store: ToolContext["store"], project: Project) {
   };
 }
 
+export function formatSection(store: ToolContext["store"], section: Section) {
+  return {
+    id: section.id,
+    name: section.name,
+    // Often the intent behind the phase, so it is returned whole rather than
+    // summarised; an agent planning around a section needs to read it.
+    description: section.description === "" ? undefined : section.description,
+    project: { id: section.projectId, path: projectPath(store, section.projectId) },
+    isArchived: section.isArchived || undefined,
+    isCollapsed: section.isCollapsed || undefined,
+    openTasks: store
+      .all("task")
+      .filter((task) => task.sectionId === section.id && !task.isCompleted).length,
+  };
+}
+
 /** Wraps a payload in the content shape MCP expects, plus the structured form. */
 export function result(data: unknown) {
   return {

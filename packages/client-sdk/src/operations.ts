@@ -269,6 +269,126 @@ export class Operations {
     return { result: section, ops: [this.store.mutate("section", section.id, section)] };
   }
 
+  /**
+   * Renames or re-describes a section, or archives it.
+   *
+   * Sparse, like `updateTask`: only what is passed is written. Where a section
+   * sits and whether it is folded are not here, because each has an operation
+   * that knows what it is doing (`reorderSection`, `setCollapsed`).
+   */
+  updateSection(
+    id: string,
+    changes: Partial<Pick<Section, "name" | "description" | "isArchived">>,
+  ): Staged<Section | null> {
+    const section = this.store.get("section", id);
+    if (section === null) return { result: null, ops: [] };
+    const op = this.store.mutate("section", id, changes);
+    return { result: this.store.get("section", id), ops: [op] };
+  }
+
+  /**
+   * Puts a section directly after `afterId`, or first with `null`.
+   *
+   * The twin of `reorderTask` and for the same reason: only the moved section is
+   * written, so two devices reordering different sections do not conflict.
+   * Archived siblings count — they still have an `order`, and skipping them
+   * would put the key between the wrong neighbours.
+   */
+  reorderSection(id: string, afterId: string | null): Staged<Section | null> {
+    const section = this.store.get("section", id);
+    if (section === null) return { result: null, ops: [] };
+
+    const siblings = this.store
+      .all("section")
+      .filter((candidate) => candidate.projectId === section.projectId && candidate.id !== id)
+      .sort((a, b) => compareOrder(a.order, b.order));
+
+    let before: string | null = null;
+    let after: string | null = siblings[0]?.order ?? null;
+    if (afterId !== null) {
+      const index = siblings.findIndex((sibling) => sibling.id === afterId);
+      if (index === -1) throw new Error(`${afterId} is not a section of the same project as ${id}`);
+      before = siblings[index]!.order;
+      after = siblings[index + 1]?.order ?? null;
+    }
+
+    const op = this.store.mutate("section", id, { order: this.store.orderBetween(before, after) });
+    return { result: this.store.get("section", id), ops: [op] };
+  }
+
+  /**
+   * Deletes a section and keeps everything that was in it.
+   *
+   * A section is a heading, not a container of record: it says where a run of
+   * tasks sits, and the tasks are the work. Deleting the heading must not delete
+   * the work, so every task that named it (subtasks too, which carry their
+   * parent's section) is put back at the project root, after whatever already
+   * lives there and in the order it had. This is the opposite of
+   * `deleteProject`, which is a container and does take its sections' tasks —
+   * and an agent calling `delete_section` gets this behaviour, not that one.
+   *
+   * The section's own description goes with it; that is the one thing a
+   * section holds that a task does not.
+   *
+   * Ordering is per list, so the new position is worked out per list: roots
+   * after the existing roots, and a subtask after its existing siblings under
+   * the same parent. Tasks are visited in their old order, which is what keeps
+   * their relative order.
+   */
+  deleteSection(id: string): Staged<{ deleted: boolean; moved: string[] }> {
+    const section = this.store.get("section", id);
+    if (section === null) return { result: { deleted: false, moved: [] }, ops: [] };
+
+    const stranded = this.store
+      .all("task")
+      .filter((task) => task.sectionId === id)
+      .sort((a, b) => compareOrder(a.order, b.order));
+
+    const ops: Op[] = [];
+    const lastIn = new Map<string, string | null>();
+    for (const task of stranded) {
+      const list = `${task.projectId}\u0000${task.parentId ?? ""}`;
+      if (!lastIn.has(list)) {
+        const roots = this.siblings({ projectId: task.projectId, sectionId: null, parentId: task.parentId });
+        lastIn.set(list, roots[roots.length - 1]?.order ?? null);
+      }
+      const order = this.store.orderBetween(lastIn.get(list) ?? null, null);
+      lastIn.set(list, order);
+      ops.push(this.store.mutate("task", task.id, { sectionId: null, order }));
+    }
+
+    ops.push(this.store.remove("section", id));
+    return { result: { deleted: true, moved: stranded.map((task) => task.id) }, ops };
+  }
+
+  /**
+   * Folds or unfolds a section or a task's subtasks.
+   *
+   * Both flags already existed in the model and already synced, which is why
+   * this is a write and not a local preference: a section collapsed on the
+   * laptop is collapsed on the phone. Writing the value it already has is
+   * not a write — it would sync for nothing, and a chevron clicked twice
+   * quickly would otherwise queue two ops that cancel out.
+   */
+  setCollapsed(
+    kind: "section" | "task",
+    id: string,
+    collapsed: boolean,
+  ): Staged<Section | Task | null> {
+    if (kind === "section") {
+      const section = this.store.get("section", id);
+      if (section === null) return { result: null, ops: [] };
+      if (section.isCollapsed === collapsed) return { result: section, ops: [] };
+      const op = this.store.mutate("section", id, { isCollapsed: collapsed });
+      return { result: this.store.get("section", id), ops: [op] };
+    }
+    const task = this.store.get("task", id);
+    if (task === null) return { result: null, ops: [] };
+    if (task.isCollapsed === collapsed) return { result: task, ops: [] };
+    const op = this.store.mutate("task", id, { isCollapsed: collapsed });
+    return { result: this.store.get("task", id), ops: [op] };
+  }
+
   createLabel(input: { name: string; color?: string }): Staged<Label> {
     const existing = this.store.all("label").find((label) => label.name === input.name);
     if (existing !== undefined) return { result: existing, ops: [] };
@@ -688,7 +808,20 @@ export class Operations {
     return { result: { projects, sections, tasks }, ops };
   }
 
-  /** Moves a task to another project, section or parent, placing it last. */
+  /**
+   * Moves a task to another project, section or parent, placing it last.
+   *
+   * A section belongs to the project it was made in, and a parent stays behind
+   * when its child leaves the project. So when the project changes and the
+   * caller did not say where, the task lands outside any section and without a
+   * parent, rather than keeping a pointer into a project it is no longer in —
+   * which is how it used to vanish from both lists. A section that is named
+   * must exist and must belong to the project the task ends up in.
+   *
+   * The subtasks come with it. They carry their parent's project and section,
+   * and a parent that moved without them would leave them filed somewhere the
+   * parent is not; they keep their parent and their order among each other.
+   */
   moveTask(
     id: string,
     target: { projectId?: string; sectionId?: string | null; parentId?: string | null },
@@ -696,10 +829,14 @@ export class Operations {
     const task = this.store.get("task", id);
     if (task === null) return { result: null, ops: [] };
 
+    const projectId = target.projectId ?? task.projectId;
+    const leavingProject = projectId !== task.projectId;
     const placement = {
-      projectId: target.projectId ?? task.projectId,
-      sectionId: target.sectionId === undefined ? task.sectionId : target.sectionId,
-      parentId: target.parentId === undefined ? task.parentId : target.parentId,
+      projectId,
+      sectionId:
+        target.sectionId === undefined ? (leavingProject ? null : task.sectionId) : target.sectionId,
+      parentId:
+        target.parentId === undefined ? (leavingProject ? null : task.parentId) : target.parentId,
     };
 
     // A task cannot become its own ancestor; that would detach the subtree.
@@ -707,11 +844,39 @@ export class Operations {
       throw new Error("cannot move a task beneath one of its own subtasks");
     }
 
-    const op = this.store.mutate("task", id, {
-      ...placement,
-      order: this.orderAtEnd(placement),
-    });
-    return { result: this.store.get("task", id), ops: [op] };
+    if (target.sectionId !== undefined && target.sectionId !== null) {
+      const section = this.store.get("section", target.sectionId);
+      if (section === null) throw new Error(`no section with id ${target.sectionId}`);
+      if (section.projectId !== projectId) {
+        throw new Error("that section belongs to a different project");
+      }
+    }
+
+    const ops = [
+      this.store.mutate("task", id, { ...placement, order: this.orderAtEnd(placement) }),
+    ];
+
+    if (leavingProject || placement.sectionId !== task.sectionId) {
+      // `seen` guards against a parent cycle in bad data, which would otherwise
+      // recurse for ever.
+      const seen = new Set<string>([id]);
+      const follow = (parentId: string): void => {
+        for (const child of this.store.all("task").filter((candidate) => candidate.parentId === parentId)) {
+          if (seen.has(child.id)) continue;
+          seen.add(child.id);
+          ops.push(
+            this.store.mutate("task", child.id, {
+              projectId: placement.projectId,
+              sectionId: placement.sectionId,
+            }),
+          );
+          follow(child.id);
+        }
+      };
+      follow(id);
+    }
+
+    return { result: this.store.get("task", id), ops };
   }
 
   private isDescendant(candidateId: string, ancestorId: string): boolean {

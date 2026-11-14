@@ -59,7 +59,7 @@ struct TaskEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
+                SwiftUI.Section {
                     TextField("Task", text: $content, axis: .vertical)
                         .font(DiurnalType.body())
                     TextField("Notes", text: $notes, axis: .vertical)
@@ -68,7 +68,7 @@ struct TaskEditorView: View {
                         .foregroundStyle(Color.dnInk2)
                 }
 
-                Section {
+                SwiftUI.Section {
                     Picker("Priority", selection: $priority) {
                         Text("p1 — urgent").tag(Priority.urgent)
                         Text("p2 — high").tag(Priority.high)
@@ -77,7 +77,7 @@ struct TaskEditorView: View {
                     }
                 }
 
-                Section("When you will do it") {
+                SwiftUI.Section("When you will do it") {
                     Toggle("Scheduled", isOn: $isScheduled)
                     if isScheduled {
                         DatePicker("Day", selection: $day, displayedComponents: .date)
@@ -88,7 +88,7 @@ struct TaskEditorView: View {
                     }
                 }
 
-                Section {
+                SwiftUI.Section {
                     Toggle("Has a deadline", isOn: $hasDeadline)
                     if hasDeadline {
                         DatePicker("Owed by", selection: $deadline, displayedComponents: .date)
@@ -101,7 +101,7 @@ struct TaskEditorView: View {
                     Text("When you plan to do it is not the same question as when it is owed.")
                 }
 
-                Section("Estimate") {
+                SwiftUI.Section("Estimate") {
                     HStack {
                         TextField("30", text: $estimate)
                             .keyboardType(.numberPad)
@@ -110,7 +110,7 @@ struct TaskEditorView: View {
                 }
 
                 if !model.labelNames(for: task).isEmpty {
-                    Section("Labels") {
+                    SwiftUI.Section("Labels") {
                         BadgeFlow(spacing: 6) {
                             ForEach(model.labelNames(for: task), id: \.self) { name in
                                 Badge(text: "@\(name)")
@@ -120,7 +120,7 @@ struct TaskEditorView: View {
                 }
 
                 if model.rewardsEnabled {
-                    Section {
+                    SwiftUI.Section {
                         TextField("An hour in the sun", text: $reward)
                     } header: {
                         Text("Reward")

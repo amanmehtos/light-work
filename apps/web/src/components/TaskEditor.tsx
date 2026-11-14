@@ -18,7 +18,7 @@
 import { useEffect, useState } from "react";
 import type { Label, Priority, Project, Task } from "@light/core";
 import type { LightStore, Operations } from "@light/client-sdk";
-import type { Op } from "@light/core";
+import { compareOrder, type Op } from "@light/core";
 import { Sheet } from "../diurnal.js";
 import { atDay, atTime, clock, dueDay, dueMinutes } from "../schedule.js";
 
@@ -61,6 +61,8 @@ interface Draft {
   labels: string;
   reward: string;
   projectId: string;
+  /** Empty for none: a `<select>` has no null. */
+  sectionId: string;
 }
 
 function draftOf(task: Task, store: LightStore): Draft {
@@ -77,6 +79,7 @@ function draftOf(task: Task, store: LightStore): Draft {
     labels: labelText(task, store),
     reward: task.reward ?? "",
     projectId: task.projectId,
+    sectionId: task.sectionId ?? "",
   };
 }
 
@@ -120,6 +123,19 @@ export function TaskEditor({
     .all("project")
     .filter((project) => !project.isArchived)
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  // The sections of whichever project is picked, in the order they are shown.
+  // An archived one is offered only if the task is already in it, so that
+  // saving does not quietly move the task out.
+  const sections = store
+    .all("section")
+    .filter(
+      (section) =>
+        draft !== null &&
+        section.projectId === draft.projectId &&
+        (!section.isArchived || section.id === task?.sectionId),
+    )
+    .sort((a, b) => compareOrder(a.order, b.order));
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((current) => (current === null ? current : { ...current, [key]: value }));
@@ -175,9 +191,11 @@ export function TaskEditor({
     }
 
     // Moving is its own operation: it has to re-place the task in the target
-    // list's ordering, which a field patch cannot do.
-    if (draft.projectId !== task.projectId) {
-      staged.push(...ops.moveTask(task.id, { projectId: draft.projectId }).ops);
+    // list's ordering, which a field patch cannot do. A section is part of where
+    // a task is, so a change of either is the one move.
+    const sectionId = draft.sectionId === "" ? null : draft.sectionId;
+    if (draft.projectId !== task.projectId || sectionId !== task.sectionId) {
+      staged.push(...ops.moveTask(task.id, { projectId: draft.projectId, sectionId }).ops);
     }
 
     commit(staged);
@@ -249,7 +267,12 @@ export function TaskEditor({
                 id="editor-project"
                 className="dn-select"
                 value={draft.projectId}
-                onChange={(event) => set("projectId", event.target.value)}
+                // A section belongs to one project, so choosing another clears it.
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current === null ? current : { ...current, projectId: event.target.value, sectionId: "" },
+                  )
+                }
               >
                 {projects.map((project: Project) => (
                   <option key={project.id} value={project.id}>
@@ -259,6 +282,28 @@ export function TaskEditor({
               </select>
             </div>
           </div>
+
+          {/* A subtask is filed by its parent, so it has no section to pick. */}
+          {task?.parentId === null && sections.length > 0 && (
+            <div className="dn-field">
+              <label className="dn-label" htmlFor="editor-section">
+                Section
+              </label>
+              <select
+                id="editor-section"
+                className="dn-select"
+                value={draft.sectionId}
+                onChange={(event) => set("sectionId", event.target.value)}
+              >
+                <option value="">No section</option>
+                {sections.map((section) => (
+                  <option key={section.id} value={section.id}>
+                    {section.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="editor-row">
             <div className="dn-field">

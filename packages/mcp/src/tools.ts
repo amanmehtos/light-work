@@ -21,7 +21,15 @@ import {
 } from "@light/client-sdk";
 import { z } from "zod";
 import type { ToolContext } from "./context.js";
-import { failure, formatProject, formatTask, humanDuration, projectPath, result } from "./format.js";
+import {
+  failure,
+  formatProject,
+  formatSection,
+  formatTask,
+  humanDuration,
+  projectPath,
+  result,
+} from "./format.js";
 
 /* ------------------------------------------------------------------ */
 /* shared shapes                                                      */
@@ -194,6 +202,32 @@ export function buildTools(): ToolDefinition[] {
           .map((candidate) => formatTask(context, candidate));
 
         return result({ task: formatTask(context, task), subtasks });
+      },
+    },
+
+    {
+      name: "list_sections",
+      title: "List sections",
+      description:
+        "Sections, in the order the app shows them, each with its project, its notes and how " +
+        "many open tasks sit in it. Pass a section's id as sectionId to list_tasks to read its " +
+        "tasks, or to move_task to put one there.",
+      readOnly: true,
+      inputSchema: {
+        projectId: z.string().optional().describe("Only this project's sections."),
+        includeArchived: z.boolean().optional().default(false),
+      },
+      handler: async (args, context) => {
+        const includeArchived = args.includeArchived === true;
+        const sections = context.store
+          .ordered("section")
+          .filter((section) => includeArchived || !section.isArchived)
+          .filter((section) => typeof args.projectId !== "string" || section.projectId === args.projectId)
+          .map((section) => formatSection(context.store, section));
+        // Grouped by project, in the order each project's own sections run,
+        // which is the order a person reads them down the page.
+        sections.sort((a, b) => a.project.path.localeCompare(b.project.path));
+        return result({ sections, total: sections.length });
       },
     },
 
@@ -777,6 +811,56 @@ export function buildTools(): ToolDefinition[] {
         });
         await context.flush(staged.ops);
         return result({ section: staged.result });
+      },
+    },
+
+    {
+      name: "update_section",
+      title: "Update a section",
+      description:
+        "Renames a section, rewrites its notes, or archives it. Sparse: omitted fields are " +
+        "untouched. To move a task into a section use move_task.",
+      readOnly: false,
+      inputSchema: {
+        sectionId: z.string(),
+        name: z.string().min(1).optional(),
+        description: z.string().optional(),
+        isArchived: z.boolean().optional(),
+      },
+      handler: async (args, context) => {
+        const id = String(args.sectionId);
+        const changes: { name?: string; description?: string; isArchived?: boolean } = {};
+        if (typeof args.name === "string") changes.name = args.name;
+        if (typeof args.description === "string") changes.description = args.description;
+        if (typeof args.isArchived === "boolean") changes.isArchived = args.isArchived;
+
+        const staged = context.ops.updateSection(id, changes);
+        if (staged.result === null) return failure(`No section with id ${id}.`);
+        await context.flush(staged.ops);
+        return result({ section: formatSection(context.store, staged.result) });
+      },
+    },
+
+    {
+      name: "delete_section",
+      title: "Delete a section",
+      description:
+        "Deletes a section but not its tasks: they move to the top level of the project, after " +
+        "the tasks already there, in the order they had. A section is a heading, not a " +
+        "container — contrast delete_project, which does take its tasks. The section's own " +
+        "notes are lost.",
+      readOnly: false,
+      inputSchema: { sectionId: z.string() },
+      handler: async (args, context) => {
+        const id = String(args.sectionId);
+        const staged = context.ops.deleteSection(id);
+        if (!staged.result.deleted) return failure(`No section with id ${id}.`);
+        await context.flush(staged.ops);
+        return result({
+          deleted: id,
+          movedTasks: staged.result.moved.length,
+          taskIds: staged.result.moved,
+        });
       },
     },
 

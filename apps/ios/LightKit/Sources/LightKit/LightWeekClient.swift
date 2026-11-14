@@ -78,6 +78,7 @@ public actor LightWeekClient {
 
         public struct Entities: Decodable, Sendable {
             public var project: [Project]?
+            public var section: [Section]?
             public var task: [Task]?
             public var label: [Label]?
             public var focusSession: [FocusSession]?

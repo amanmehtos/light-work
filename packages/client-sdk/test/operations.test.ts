@@ -282,6 +282,248 @@ describe("deleteTask", () => {
   });
 });
 
+describe("moveTask and sections", () => {
+  it("moves a task into a section, last in it", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const resident = ops.createTask({ projectId: p.id, content: "resident", sectionId: section.id }).result;
+    const task = ops.createTask({ projectId: p.id, content: "arriving" }).result;
+
+    ops.moveTask(task.id, { sectionId: section.id });
+
+    const moved = store.get("task", task.id)!;
+    expect(moved.sectionId).toBe(section.id);
+    expect(compareOrder(resident.order, moved.order)).toBe(-1);
+  });
+
+  it("takes a task out of its section with null", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const task = ops.createTask({ projectId: p.id, content: "x", sectionId: section.id }).result;
+
+    ops.moveTask(task.id, { sectionId: null });
+    expect(store.get("task", task.id)!.sectionId).toBeNull();
+  });
+
+  it("refuses a section that does not exist, or that belongs to another project", () => {
+    const a = project("a");
+    const b = project("b");
+    const foreign = ops.createSection({ projectId: b.id, name: "elsewhere" }).result;
+    const task = ops.createTask({ projectId: a.id, content: "x" }).result;
+
+    expect(() => ops.moveTask(task.id, { sectionId: "ghost" })).toThrow(/no section/);
+    expect(() => ops.moveTask(task.id, { sectionId: foreign.id })).toThrow(/different project/);
+    // Nothing was written on the way to refusing.
+    expect(store.get("task", task.id)!.sectionId).toBeNull();
+  });
+
+  it("does not leave a section pointing into the project it left", () => {
+    const from = project("from");
+    const to = project("to");
+    const section = ops.createSection({ projectId: from.id, name: "Phase one" }).result;
+    const task = ops.createTask({ projectId: from.id, content: "x", sectionId: section.id }).result;
+
+    ops.moveTask(task.id, { projectId: to.id });
+
+    const moved = store.get("task", task.id)!;
+    expect(moved.projectId).toBe(to.id);
+    expect(moved.sectionId).toBeNull();
+  });
+
+  it("takes subtasks along, so they are never filed where their parent is not", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const parent = ops.createTask({ projectId: p.id, content: "parent" }).result;
+    const child = ops.createTask({ projectId: p.id, content: "child", parentId: parent.id }).result;
+    const grandchild = ops.createTask({ projectId: p.id, content: "grandchild", parentId: child.id }).result;
+
+    const staged = ops.moveTask(parent.id, { sectionId: section.id });
+
+    expect(store.get("task", child.id)!.sectionId).toBe(section.id);
+    expect(store.get("task", grandchild.id)!.sectionId).toBe(section.id);
+    // Still a tree: only the placement of the subtasks changed.
+    expect(store.get("task", child.id)!.parentId).toBe(parent.id);
+    expect(store.get("task", grandchild.id)!.parentId).toBe(child.id);
+    expect(staged.ops).toHaveLength(3);
+  });
+
+  it("moving within a section does not rewrite its subtasks", () => {
+    const p = project();
+    const parent = ops.createTask({ projectId: p.id, content: "parent" }).result;
+    ops.createTask({ projectId: p.id, content: "child", parentId: parent.id });
+
+    expect(ops.moveTask(parent.id, {}).ops).toHaveLength(1);
+  });
+});
+
+describe("updateSection", () => {
+  it("writes only what it was given", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one", description: "plan" }).result;
+
+    const staged = ops.updateSection(section.id, { name: "Phase 1" });
+
+    expect(staged.ops).toHaveLength(1);
+    const after = store.get("section", section.id)!;
+    expect(after.name).toBe("Phase 1");
+    expect(after.description).toBe("plan");
+  });
+
+  it("does nothing for a section that is gone", () => {
+    expect(ops.updateSection("ghost", { name: "x" })).toEqual({ result: null, ops: [] });
+  });
+});
+
+describe("reorderSection", () => {
+  it("places a section after another, or first with null", () => {
+    const p = project();
+    const a = ops.createSection({ projectId: p.id, name: "a" }).result;
+    const b = ops.createSection({ projectId: p.id, name: "b" }).result;
+    const c = ops.createSection({ projectId: p.id, name: "c" }).result;
+    const inOrder = () =>
+      store.all("section").sort((x, y) => compareOrder(x.order, y.order)).map((s) => s.name);
+
+    ops.reorderSection(a.id, c.id);
+    expect(inOrder()).toEqual(["b", "c", "a"]);
+
+    ops.reorderSection(c.id, null);
+    expect(inOrder()).toEqual(["c", "b", "a"]);
+    expect(b.id).not.toBe(c.id);
+  });
+
+  it("writes only the section that moved", () => {
+    const p = project();
+    const a = ops.createSection({ projectId: p.id, name: "a" }).result;
+    const b = ops.createSection({ projectId: p.id, name: "b" }).result;
+    expect(ops.reorderSection(a.id, b.id).ops).toHaveLength(1);
+  });
+
+  it("refuses an anchor from another project", () => {
+    const a = ops.createSection({ projectId: project("one").id, name: "a" }).result;
+    const other = ops.createSection({ projectId: project("two").id, name: "other" }).result;
+    expect(() => ops.reorderSection(a.id, other.id)).toThrow(/not a section/);
+  });
+});
+
+describe("deleteSection", () => {
+  it("deletes the section and keeps every task that was in it", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const one = ops.createTask({ projectId: p.id, content: "one", sectionId: section.id }).result;
+    const two = ops.createTask({ projectId: p.id, content: "two", sectionId: section.id }).result;
+
+    const staged = ops.deleteSection(section.id);
+
+    expect(store.get("section", section.id)).toBeNull();
+    // A heading, not a container of record: nothing the section held is gone.
+    expect(store.get("task", one.id)).not.toBeNull();
+    expect(store.get("task", two.id)).not.toBeNull();
+    expect(store.count("task")).toBe(2);
+    expect(staged.result).toEqual({ deleted: true, moved: [one.id, two.id] });
+    expect(staged.ops.filter((op) => op.kind === "task")).toHaveLength(2);
+  });
+
+  it("lands the tasks at the project root, not in some other section", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const other = ops.createSection({ projectId: p.id, name: "Phase two" }).result;
+    const inside = ops.createTask({ projectId: p.id, content: "inside", sectionId: section.id }).result;
+    const elsewhere = ops.createTask({ projectId: p.id, content: "elsewhere", sectionId: other.id }).result;
+
+    ops.deleteSection(section.id);
+
+    expect(store.get("task", inside.id)!.sectionId).toBeNull();
+    expect(store.get("task", inside.id)!.projectId).toBe(p.id);
+    // Another section's tasks are not touched.
+    expect(store.get("task", elsewhere.id)!.sectionId).toBe(other.id);
+  });
+
+  it("puts them after the tasks already at the root, in the order they had", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const loose = ops.createTask({ projectId: p.id, content: "loose" }).result;
+    const first = ops.createTask({ projectId: p.id, content: "first", sectionId: section.id }).result;
+    const second = ops.createTask({ projectId: p.id, content: "second", sectionId: section.id }).result;
+    const third = ops.createTask({ projectId: p.id, content: "third", sectionId: section.id }).result;
+
+    ops.deleteSection(section.id);
+
+    const root = store
+      .all("task")
+      .filter((t) => t.sectionId === null && t.parentId === null)
+      .sort((a, b) => compareOrder(a.order, b.order))
+      .map((t) => t.id);
+    expect(root).toEqual([loose.id, first.id, second.id, third.id]);
+  });
+
+  it("keeps subtasks attached to their parent, and out of the deleted section", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+    const parent = ops.createTask({ projectId: p.id, content: "parent", sectionId: section.id }).result;
+    const child = ops.createTask({
+      projectId: p.id,
+      content: "child",
+      parentId: parent.id,
+      sectionId: section.id,
+    }).result;
+
+    ops.deleteSection(section.id);
+
+    expect(store.get("task", parent.id)!.sectionId).toBeNull();
+    const after = store.get("task", child.id)!;
+    expect(after.sectionId).toBeNull();
+    expect(after.parentId).toBe(parent.id);
+  });
+
+  it("does nothing for a section that is gone", () => {
+    expect(ops.deleteSection("ghost")).toEqual({ result: { deleted: false, moved: [] }, ops: [] });
+  });
+
+  it("deletes an empty section with exactly one op", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "empty" }).result;
+    expect(ops.deleteSection(section.id).ops).toHaveLength(1);
+  });
+});
+
+describe("setCollapsed", () => {
+  it("folds and unfolds a section", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "Phase one" }).result;
+
+    ops.setCollapsed("section", section.id, true);
+    expect(store.get("section", section.id)!.isCollapsed).toBe(true);
+    ops.setCollapsed("section", section.id, false);
+    expect(store.get("section", section.id)!.isCollapsed).toBe(false);
+  });
+
+  it("folds and unfolds a task's subtasks, and touches nothing else on it", () => {
+    const p = project();
+    const task = ops.createTask({ projectId: p.id, content: "parent", priority: 1 }).result;
+
+    const staged = ops.setCollapsed("task", task.id, true);
+    expect(staged.ops).toHaveLength(1);
+    const after = store.get("task", task.id)!;
+    expect(after.isCollapsed).toBe(true);
+    expect(after.priority).toBe(1);
+    expect(after.isCompleted).toBe(false);
+  });
+
+  it("writes nothing when the value is already what was asked for", () => {
+    const p = project();
+    const section = ops.createSection({ projectId: p.id, name: "x" }).result;
+    const task = ops.createTask({ projectId: p.id, content: "x" }).result;
+
+    expect(ops.setCollapsed("section", section.id, false).ops).toEqual([]);
+    expect(ops.setCollapsed("task", task.id, false).ops).toEqual([]);
+  });
+
+  it("does nothing for an id that is gone", () => {
+    expect(ops.setCollapsed("section", "ghost", true)).toEqual({ result: null, ops: [] });
+    expect(ops.setCollapsed("task", "ghost", true)).toEqual({ result: null, ops: [] });
+  });
+});
+
 describe("deleteProject", () => {
   it("takes the project's sections and tasks with it", () => {
     const p = project();

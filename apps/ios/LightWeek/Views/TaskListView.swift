@@ -20,6 +20,13 @@ struct TaskListView: View {
     }
 
     @State private var surface: Surface = .list
+    /// The project the list is narrowed to, or nil for every open task. Kept as
+    /// an id so a project deleted elsewhere simply stops matching.
+    ///
+    /// A stopgap for the project navigation that belongs to a later phase: the
+    /// list used to be one flat run of every task on the account, which has no
+    /// place for a section heading. Narrowed to a project it has one.
+    @State private var scopeId: String?
     @State private var day = Schedule.localDay(Date())
     @State private var editing: LightKit.Task?
     @State private var rescheduling: LightKit.Task?
@@ -35,7 +42,7 @@ struct TaskListView: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle(surface == .day ? "Your day" : "This week")
+                .navigationTitle(title)
                 .toolbar { toolbar }
                 // Behind the title rather than above the list: the sky is
                 // ambient, and a band that pushed the week down the screen
@@ -77,6 +84,18 @@ struct TaskListView: View {
         }
     }
 
+    private var scope: Project? {
+        scopeId.flatMap { id in model.visibleProjects.first { $0.id == id } }
+    }
+
+    private var title: String {
+        switch surface {
+        case .day: return "Your day"
+        case .list: return scope?.name ?? "This week"
+        case .done: return "This week"
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         VStack(spacing: 0) {
@@ -88,8 +107,11 @@ struct TaskListView: View {
             .padding(.bottom, 8)
 
             if surface == .list {
-                ComposeBar(destination: model.defaultProject?.name) { title in
-                    guard let project = model.defaultProject else { return }
+                // Into the project being looked at, when one is: a task added
+                // while viewing a project that landed in the inbox would be a
+                // task that vanished from the screen it was typed on.
+                ComposeBar(destination: (scope ?? model.defaultProject)?.name) { title in
+                    guard let project = scope ?? model.defaultProject else { return }
                     model.create(content: title, projectId: project.id)
                 }
             }
@@ -98,61 +120,44 @@ struct TaskListView: View {
             case .day:
                 DayView(model: model, day: $day) { editing = $0 }
             case .list:
-                list(model.openRows, empty: "Nothing open",
+                list(model.blocks(in: scope), nests: true, empty: "Nothing open",
                      detail: "Every task on this account is done.")
             case .done:
-                list(model.completedRows, empty: "Nothing finished yet",
+                list(model.completedBlocks(), nests: false, empty: "Nothing finished yet",
                      detail: "Tasks you complete collect here, and can be reopened.")
             }
         }
     }
 
     @ViewBuilder
-    private func list(_ rows: [TaskListModel.Row], empty: String, detail: String) -> some View {
+    private func list(_ blocks: [TaskListModel.Block], nests: Bool, empty: String, detail: String) -> some View {
+        let total = blocks.reduce(0) { $0 + $1.entries.count }
+        // A project that is all headings and no tasks is still a project to look
+        // at: the headings are the structure, and they are what a task is
+        // dropped into on the web.
+        let hasHeadings = blocks.contains { $0.section != nil }
         if let error = model.loadError, model.rows.isEmpty {
             message(title: "Could not load your tasks", detail: error)
-        } else if rows.isEmpty && !model.isLoading {
+        } else if total == 0 && !hasHeadings && !model.isLoading {
             message(title: empty, detail: detail)
         } else {
-            List(rows) { row in
-                TaskRowView(
-                    row: row,
-                    labels: model.labelNames(for: row.task),
-                    onToggle: { toggle(row.task) },
-                    onEdit: { editing = row.task },
-                    onFocus: { focus(row) })
-                    .listRowSeparatorTint(Color.dnLine)
-                    .listRowBackground(Color.clear)
-                    // Leading is the one you do most: finishing. It goes through
-                    // `toggle`, which is `Operations.complete` — the rule that
-                    // files a task's reward — and not a write of `isCompleted`
-                    // of its own, or a swipe would finish a task and quietly
-                    // earn nothing.
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        Button { toggle(row.task) } label: {
-                            Label(row.task.isCompleted ? "Reopen" : "Complete",
-                                  systemImage: row.task.isCompleted ? "arrow.uturn.backward" : "checkmark")
-                        }
-                        // Tinted with ink: the system would otherwise paint the
-                        // action in its own colour, and this app has no hue.
-                        .tint(Color.dnInk)
+            List {
+                ForEach(blocks) { block in
+                    if let section = block.section {
+                        SectionHeadingRow(
+                            section: section, count: block.entries.count,
+                            onToggle: { model.setCollapsed(section, !section.isCollapsed) })
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                     }
-                    // Not a full swipe: a delete that one long drag can reach
-                    // by accident is how a task with subtasks goes unnoticed.
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        // No `.destructive` role anywhere here: the system paints
-                        // that red, and red is spoken for by overdue.
-                        Button { deleting = row.task } label: {
-                            Label("Delete", systemImage: "trash")
+                    // A folded section keeps its rows out of the list but its
+                    // count on the heading, so it says what is folded in it.
+                    if block.section?.isCollapsed != true {
+                        ForEach(block.entries.filter { !$0.outline.isHidden }) { entry in
+                            rowView(entry, nests: nests)
                         }
-                        .tint(Color.dnInk)
-
-                        Button { rescheduling = row.task } label: {
-                            Label("Reschedule", systemImage: "calendar")
-                        }
-                        .tint(Color.dnInk2)
                     }
-                    .contextMenu { menu(for: row.task) }
+                }
             }
             .listStyle(.plain)
             .refreshable { await model.load() }
@@ -183,6 +188,51 @@ struct TaskListView: View {
                      : "Its \(count) subtask\(count == 1 ? "" : "s") will be deleted too. This can’t be undone.")
             }
         }
+    }
+
+    /// One row, with everything that hangs off it.
+    private func rowView(_ entry: TaskListModel.Entry, nests: Bool) -> some View {
+        let row = entry.row
+        return TaskRowView(
+            row: row,
+            outline: nests ? entry.outline : nil,
+            labels: model.labelNames(for: row.task),
+            onToggle: { toggle(row.task) },
+            onEdit: { editing = row.task },
+            onFocus: { focus(row) },
+            onFold: { model.setCollapsed(row.task, !row.task.isCollapsed) })
+            .listRowSeparatorTint(Color.dnLine)
+            .listRowBackground(Color.clear)
+            // Leading is the one you do most: finishing. It goes through
+            // `toggle`, which is `Operations.complete` — the rule that
+            // files a task's reward — and not a write of `isCompleted`
+            // of its own, or a swipe would finish a task and quietly
+            // earn nothing.
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                Button { toggle(row.task) } label: {
+                    Label(row.task.isCompleted ? "Reopen" : "Complete",
+                          systemImage: row.task.isCompleted ? "arrow.uturn.backward" : "checkmark")
+                }
+                // Tinted with ink: the system would otherwise paint the
+                // action in its own colour, and this app has no hue.
+                .tint(Color.dnInk)
+            }
+            // Not a full swipe: a delete that one long drag can reach
+            // by accident is how a task with subtasks goes unnoticed.
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                // No `.destructive` role anywhere here: the system paints
+                // that red, and red is spoken for by overdue.
+                Button { deleting = row.task } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .tint(Color.dnInk)
+
+                Button { rescheduling = row.task } label: {
+                    Label("Reschedule", systemImage: "calendar")
+                }
+                .tint(Color.dnInk2)
+            }
+            .contextMenu { menu(for: row.task) }
     }
 
     /// Done and not done, from one place: the swipe and the box on the row both
@@ -260,11 +310,34 @@ struct TaskListView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        if surface == .list {
+            ToolbarItem(placement: .topBarLeading) {
+                Menu {
+                    Button { scopeId = nil } label: {
+                        if scope == nil { Label("All projects", systemImage: "checkmark") } else { Text("All projects") }
+                    }
+                    ForEach(model.movableProjects) { project in
+                        Button { scopeId = project.id } label: {
+                            if scope?.id == project.id {
+                                Label(project.name, systemImage: "checkmark")
+                            } else {
+                                Text(project.name)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "folder")
+                        .foregroundStyle(Color.dnInk)
+                }
+                .accessibilityLabel("Show a project")
+            }
+        }
+
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Button("Preferences") { showingPreferences = true }
                 if case .signedIn(let email) = auth.state, let email {
-                    Section(email) {
+                    SwiftUI.Section(email) {
                         signOutButton
                     }
                 } else {
@@ -301,15 +374,39 @@ struct TaskListView: View {
 /// One task, flat on the page.
 struct TaskRowView: View {
     let row: TaskListModel.Row
+    /// Where the row sits among its subtasks; nil in a list that does not nest.
+    let outline: Outline.Row?
     let labels: [String]
     let onToggle: () -> Void
     let onEdit: () -> Void
     let onFocus: () -> Void
+    let onFold: () -> Void
 
     private static let priorityName = ["", "urgent", "high", "medium", "none"]
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
+            if let outline {
+                // A slot on every row, so titles line up whether or not a row has
+                // a chevron. The glyph says what a tap will do.
+                Group {
+                    if outline.hasChildren {
+                        Button(action: onFold) {
+                            Image(systemName: outline.isCollapsed ? "chevron.right" : "chevron.down")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(Color.dnMuted)
+                                .frame(width: 20, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(
+                            "\(outline.isCollapsed ? "Show" : "Hide") subtasks of \(row.task.content)")
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(width: 20)
+            }
+
             Checkbox(isOn: row.task.isCompleted, label: row.task.content, action: onToggle)
 
             VStack(alignment: .leading, spacing: 6) {
@@ -341,6 +438,9 @@ struct TaskRowView: View {
             }
         }
         .padding(.vertical, 6)
+        // Indented by depth, which is how a subtask reads as belonging to the
+        // row above it.
+        .padding(.leading, CGFloat(outline?.depth ?? 0) * 22)
     }
 
     @ViewBuilder
@@ -352,6 +452,17 @@ struct TaskRowView: View {
 
         if let projectName = row.projectName {
             Badge(text: projectName)
+        }
+
+        // How far through its own subtasks, whether or not they are showing:
+        // folded, this is all the row has to say what is inside.
+        if let outline, outline.subtasksTotal > 0 {
+            Badge(text: "\(outline.subtasksDone)/\(outline.subtasksTotal)", weight: .outline)
+        }
+
+        // A subtask standing away from its parent says whose it is.
+        if let parent = outline?.parentTitle {
+            Badge(text: "↳ \(parent)", weight: .outline)
         }
 
         if let due = row.task.due {
@@ -406,5 +517,45 @@ struct TaskRowView: View {
         if calendar.isDateInToday(date) { return "today" }
         if calendar.isDateInTomorrow(date) { return "tomorrow" }
         return date.formatted(.dateTime.month(.abbreviated).day())
+    }
+}
+
+/// A section's heading in a project list: a chevron, the name, how many tasks it
+/// holds, and the notes beneath it while it is open.
+///
+/// Tapping folds it, and that is synced — the flag is the one the web writes.
+/// Making, renaming and deleting sections stays on the web this phase.
+struct SectionHeadingRow: View {
+    let section: LightKit.Section
+    let count: Int
+    let onToggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button(action: onToggle) {
+                HStack(spacing: 8) {
+                    Image(systemName: section.isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.dnMuted)
+                        .frame(width: 16)
+                    Text(section.name)
+                        .font(DiurnalType.body(.headline, weight: .semibold))
+                        .foregroundStyle(Color.dnInk)
+                    Badge(text: "\(count)")
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(section.name), \(section.isCollapsed ? "folded" : "open"), \(count) tasks")
+
+            if !section.isCollapsed && !section.description.isEmpty {
+                Text(section.description)
+                    .font(DiurnalType.body(.footnote))
+                    .foregroundStyle(Color.dnInk2)
+                    .lineLimit(3)
+            }
+        }
+        .padding(.top, 10)
     }
 }

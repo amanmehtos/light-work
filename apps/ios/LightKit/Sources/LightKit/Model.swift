@@ -114,6 +114,100 @@ public struct Task: Codable, Sendable, Identifiable, Equatable {
     public var isCompleted: Bool
     public var completedAt: String?
     public var createdAt: String
+    /// The task's place in the Today and Upcoming lists, kept apart from
+    /// `order`. Read so that it round-trips; nothing here arranges by it yet.
+    public var dayOrder: String? = nil
+    /// Whether the task's subtasks are folded away. Synced, so a task folded on
+    /// the laptop is folded here.
+    public var isCollapsed: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case id, projectId, sectionId, parentId, content, description, priority, order
+        case due, deadline, duration, labelIds, reward, isCompleted, completedAt, createdAt
+        case dayOrder, isCollapsed
+    }
+}
+
+extension Task {
+    /// Spelled out for the two fields that arrived after there were tasks.
+    ///
+    /// `dayOrder` is optional and would decode by itself, but `isCollapsed` is
+    /// not, and the synthesised decoder throws on a missing non-optional — which
+    /// would fail the whole snapshot, not one task. A task stored before the key
+    /// existed is not folded, so absent reads as `false`. (This is the
+    /// additive-in-both-directions the web relies on in the other direction:
+    /// extra keys on the wire are ignored here, and the web's merge keeps the
+    /// ones this client never sends.)
+    ///
+    /// In an extension so the memberwise initialiser survives.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        projectId = try values.decode(String.self, forKey: .projectId)
+        sectionId = try values.decodeIfPresent(String.self, forKey: .sectionId)
+        parentId = try values.decodeIfPresent(String.self, forKey: .parentId)
+        content = try values.decode(String.self, forKey: .content)
+        description = try values.decode(String.self, forKey: .description)
+        priority = try values.decode(Priority.self, forKey: .priority)
+        order = try values.decode(String.self, forKey: .order)
+        due = try values.decodeIfPresent(Due.self, forKey: .due)
+        deadline = try values.decodeIfPresent(Deadline.self, forKey: .deadline)
+        duration = try values.decodeIfPresent(Duration.self, forKey: .duration)
+        labelIds = try values.decode([String].self, forKey: .labelIds)
+        reward = try values.decodeIfPresent(String.self, forKey: .reward)
+        isCompleted = try values.decode(Bool.self, forKey: .isCompleted)
+        completedAt = try values.decodeIfPresent(String.self, forKey: .completedAt)
+        createdAt = try values.decode(String.self, forKey: .createdAt)
+        dayOrder = try values.decodeIfPresent(String.self, forKey: .dayOrder)
+        isCollapsed = try values.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false
+    }
+}
+
+/// A heading in a project, under which a run of its tasks sits.
+///
+/// A heading and not a container of record: deleting one keeps its tasks (see
+/// `Operations.deleteSection` in `@light/client-sdk`), and a task whose section
+/// has gone is simply drawn with the unsectioned ones. This client reads them;
+/// making them stays on the web for now.
+///
+/// Named `Section`, as in the model it mirrors. In a file that also imports
+/// SwiftUI the two collide, so SwiftUI's is written `SwiftUI.Section` there —
+/// the same accommodation `Task` already asks of `_Concurrency.Task`.
+public struct Section: Codable, Sendable, Identifiable, Equatable {
+    public var id: String
+    public var projectId: String
+    public var name: String
+    /// Markdown. Several of the imported sections hold the plan for their phase.
+    public var description: String
+    public var order: String
+    public var isArchived: Bool
+    public var isCollapsed: Bool
+
+    public init(id: String, projectId: String, name: String, description: String = "",
+                order: String, isArchived: Bool = false, isCollapsed: Bool = false) {
+        self.id = id
+        self.projectId = projectId
+        self.name = name
+        self.description = description
+        self.order = order
+        self.isArchived = isArchived
+        self.isCollapsed = isCollapsed
+    }
+
+    /// Forgiving about the three fields that are only ever flags or prose. A
+    /// section that arrives without them is a plain, open, unarchived one; the
+    /// alternative is a single odd row failing the whole snapshot, and the whole
+    /// account with it.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        projectId = try values.decode(String.self, forKey: .projectId)
+        name = try values.decode(String.self, forKey: .name)
+        description = try values.decodeIfPresent(String.self, forKey: .description) ?? ""
+        order = try values.decode(String.self, forKey: .order)
+        isArchived = try values.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+        isCollapsed = try values.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false
+    }
 }
 
 /// The account's settings. One record, at a well-known id.
