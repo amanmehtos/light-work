@@ -52,6 +52,10 @@ export function formatTask(context: ToolContext, task: Task) {
     parentId: task.parentId ?? undefined,
     priority: task.priority,
     priorityLabel: `p${task.priority}`,
+    // Only once the task has been placed in a day's list. It is where the task
+    // sorts in Today and Upcoming, which is not where it sorts in its project;
+    // a null on every task would read as a field to be filled in.
+    dayOrder: task.dayOrder ?? undefined,
     due: task.due === null ? undefined : {
       date: task.due.date,
       recurring: task.due.isRecurring,

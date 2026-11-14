@@ -1,3 +1,4 @@
+export * from "./day-order.js";
 export * from "./operations.js";
 export * from "./parse.js";
 export * from "./recurrence.js";

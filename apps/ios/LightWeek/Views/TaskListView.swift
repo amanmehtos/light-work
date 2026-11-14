@@ -2,31 +2,20 @@ import SwiftUI
 import DiurnalUI
 import LightKit
 
-/// The tasks, as a list or as a day.
+/// The app's navigation: a list of places, and the screen each one opens.
 ///
-/// The list is urgent-first, which is the order someone deciding what to do
-/// next wants — not the order they would file these in. The day is the
-/// planning surface: the same tasks against the hours they are meant to happen
-/// in. The two are a segmented control rather than two tabs, because they are
-/// one set of tasks seen two ways.
+/// The root is `HomeView` — Inbox, Today, Upcoming, Day, Done, and the projects —
+/// and each place pushes onto it. A place is a list of tasks, or the day, and
+/// they share everything under the list: the rows, the swipes, the editor.
+///
+/// It opens on Today. That is the screen someone opens this app for, and the
+/// list of places is one step back from it.
 struct TaskListView: View {
     @ObservedObject var auth: LightWeekAuth
     @StateObject private var model: TaskListModel
 
-    private enum Surface: String, CaseIterable {
-        case list = "List"
-        case day = "Day"
-        case done = "Done"
-    }
-
-    @State private var surface: Surface = .list
-    /// The project the list is narrowed to, or nil for every open task. Kept as
-    /// an id so a project deleted elsewhere simply stops matching.
-    ///
-    /// A stopgap for the project navigation that belongs to a later phase: the
-    /// list used to be one flat run of every task on the account, which has no
-    /// place for a section heading. Narrowed to a project it has one.
-    @State private var scopeId: String?
+    /// Where in the navigation the person is. Starts on Today: see above.
+    @State private var path: [Destination] = [.today]
     @State private var day = Schedule.localDay(Date())
     @State private var editing: LightKit.Task?
     @State private var rescheduling: LightKit.Task?
@@ -40,19 +29,21 @@ struct TaskListView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle(title)
-                .toolbar { toolbar }
-                // Behind the title rather than above the list: the sky is
-                // ambient, and a band that pushed the week down the screen
-                // would be charging real estate for weather.
-                .background(alignment: .top) {
-                    SkyHeader(height: .standard)
-                        .ignoresSafeArea(edges: .top)
-                        .allowsHitTesting(false)
+        NavigationStack(path: $path) {
+            HomeView(
+                model: model,
+                onPreferences: { showingPreferences = true },
+                onSignOut: {
+                    auth.signOut()
+                    _Concurrency.Task { await model.load() }
+                },
+                email: { if case .signedIn(let email) = auth.state { return email } else { return nil } }())
+                .sky()
+                .navigationDestination(for: Destination.self) { destination in
+                    screen(destination)
+                        .navigationTitle(title(of: destination))
+                        .sky()
                 }
-                .toolbarBackground(.hidden, for: .navigationBar)
         }
         // No tint anywhere in this app: a monochrome system has no accent, and
         // SwiftUI's default blue is exactly the hue the design excludes.
@@ -84,44 +75,56 @@ struct TaskListView: View {
         }
     }
 
-    private var scope: Project? {
-        scopeId.flatMap { id in model.visibleProjects.first { $0.id == id } }
+    /// The project a destination names, if it still exists: an id kept in the
+    /// navigation path goes stale when the project is deleted elsewhere, and a
+    /// screen that said so is better than one that crashed.
+    private func project(for destination: Destination) -> Project? {
+        switch destination {
+        case .inbox: return model.inbox
+        case .project(let id): return model.visibleProjects.first { $0.id == id }
+        default: return nil
+        }
     }
 
-    private var title: String {
-        switch surface {
+    private func title(of destination: Destination) -> String {
+        switch destination {
+        case .inbox: return "Inbox"
+        case .today: return "Today"
+        case .upcoming: return "Upcoming"
         case .day: return "Your day"
-        case .list: return scope?.name ?? "This week"
-        case .done: return "This week"
+        case .done: return "Done"
+        case .project: return project(for: destination)?.name ?? "Project"
         }
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func screen(_ destination: Destination) -> some View {
         VStack(spacing: 0) {
-            Picker("View", selection: $surface) {
-                ForEach(Surface.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-
-            if surface == .list {
-                // Into the project being looked at, when one is: a task added
-                // while viewing a project that landed in the inbox would be a
-                // task that vanished from the screen it was typed on.
-                ComposeBar(destination: (scope ?? model.defaultProject)?.name) { title in
-                    guard let project = scope ?? model.defaultProject else { return }
-                    model.create(content: title, projectId: project.id)
+            switch destination {
+            case .inbox, .project:
+                if let project = project(for: destination) {
+                    // Into the project being looked at: a task added while
+                    // viewing one that landed in the inbox would be a task that
+                    // vanished from the screen it was typed on. Only here — Today
+                    // and Upcoming are lists of what is due, and a task typed into
+                    // one would have no date and vanish just the same.
+                    ComposeBar(destination: project.name) { title in
+                        model.create(content: title, projectId: project.id)
+                    }
+                    list(model.blocks(in: project), nests: true, empty: "Nothing open",
+                         detail: "Every task in this project is done.")
+                } else {
+                    message(title: "That project is gone",
+                            detail: "It was deleted or archived on another device.")
                 }
-            }
-
-            switch surface {
+            case .today:
+                list(model.todayBlocks(), nests: true, empty: "Nothing due today",
+                     detail: "Nothing is due today, and nothing is overdue.")
+            case .upcoming:
+                list(model.upcomingBlocks(), nests: true, empty: "Nothing scheduled ahead",
+                     detail: "Tasks with a date after today collect here, a day at a time.")
             case .day:
                 DayView(model: model, day: $day) { editing = $0 }
-            case .list:
-                list(model.blocks(in: scope), nests: true, empty: "Nothing open",
-                     detail: "Every task on this account is done.")
             case .done:
                 list(model.completedBlocks(), nests: false, empty: "Nothing finished yet",
                      detail: "Tasks you complete collect here, and can be reopened.")
@@ -147,6 +150,11 @@ struct TaskListView: View {
                         SectionHeadingRow(
                             section: section, count: block.entries.count,
                             onToggle: { model.setCollapsed(section, !section.isCollapsed) })
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
+                    if let day = block.day {
+                        DayHeadingRow(day: day, today: Schedule.localDay(Date()), count: block.entries.count)
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                     }
@@ -306,58 +314,6 @@ struct TaskListView: View {
         }
         .padding(32)
         .frame(maxHeight: .infinity)
-    }
-
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        if surface == .list {
-            ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    Button { scopeId = nil } label: {
-                        if scope == nil { Label("All projects", systemImage: "checkmark") } else { Text("All projects") }
-                    }
-                    ForEach(model.movableProjects) { project in
-                        Button { scopeId = project.id } label: {
-                            if scope?.id == project.id {
-                                Label(project.name, systemImage: "checkmark")
-                            } else {
-                                Text(project.name)
-                            }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "folder")
-                        .foregroundStyle(Color.dnInk)
-                }
-                .accessibilityLabel("Show a project")
-            }
-        }
-
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Button("Preferences") { showingPreferences = true }
-                if case .signedIn(let email) = auth.state, let email {
-                    SwiftUI.Section(email) {
-                        signOutButton
-                    }
-                } else {
-                    signOutButton
-                }
-            } label: {
-                Image(systemName: "person.crop.circle")
-                    .foregroundStyle(Color.dnInk)
-            }
-        }
-    }
-
-    private var signOutButton: some View {
-        // No `.destructive` role: the system paints that red, and signing out
-        // here only forgets the tokens — the grant itself is revoked from the
-        // account, so there is nothing destructive to warn about either.
-        Button("Sign out") {
-            auth.signOut()
-            _Concurrency.Task { await model.load() }
-        }
     }
 
     private func focus(_ row: TaskListModel.Row) {
@@ -557,5 +513,66 @@ struct SectionHeadingRow: View {
             }
         }
         .padding(.top, 10)
+    }
+}
+
+/// A day's heading in Upcoming: "Tomorrow", or the weekday and date, and how many
+/// tasks fall on it.
+///
+/// Read-only. On the web this is also where a task is dropped to move it to that
+/// day; here it is a label, and a task is rescheduled from its swipe or its menu.
+struct DayHeadingRow: View {
+    let day: String
+    let today: String
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(DiurnalType.body(.headline, weight: .semibold))
+                .foregroundStyle(Color.dnInk)
+            if let detail {
+                Text(detail)
+                    .font(DiurnalType.body(.footnote))
+                    .foregroundStyle(Color.dnMuted)
+            }
+            Badge(text: "\(count)")
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 10)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityLabel("\(detail.map { "\(title), \($0)" } ?? title), \(count) tasks")
+    }
+
+    private var date: Date? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = Calendar.current.timeZone
+        return formatter.date(from: day)
+    }
+
+    private var formatted: String {
+        date?.formatted(.dateTime.weekday(.wide).day().month(.abbreviated)) ?? day
+    }
+
+    /// The same two cases the web's heading has: tomorrow by name with its date
+    /// beside it, and any other day by its date alone.
+    private var isTomorrow: Bool { day == Schedule.shift(day: today, by: 1) }
+    private var title: String { isTomorrow ? "Tomorrow" : formatted }
+    private var detail: String? { isTomorrow ? formatted : nil }
+}
+
+private extension View {
+    /// The sky behind the title rather than above the list: it is ambient, and a
+    /// band that pushed the list down the screen would be charging real estate
+    /// for weather. On every screen of the navigation, not only the first.
+    func sky() -> some View {
+        background(alignment: .top) {
+            SkyHeader(height: .standard)
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+        }
+        .toolbarBackground(.hidden, for: .navigationBar)
     }
 }

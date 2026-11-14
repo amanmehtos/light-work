@@ -28,6 +28,7 @@ import {
   type QuickAddParse,
   type QuickAddSchedule,
 } from "./parse.js";
+import { placeInDay, tasksOnDay, type DayScope } from "./day-order.js";
 import { nextOccurrence, parseRecurrence } from "./recurrence.js";
 import type { LightStore } from "./store.js";
 import { instantAt } from "./wallclock.js";
@@ -916,6 +917,39 @@ export class Operations {
 
     const op = this.store.mutate("task", id, { order: this.store.orderBetween(before, after) });
     return { result: this.store.get("task", id), ops: [op] };
+  }
+
+  /**
+   * Puts a task directly after `afterId` in a day's list, or first with `null`.
+   *
+   * The twin of `reorderTask` for Today and for each day of Upcoming, and the
+   * reason `Task.dayOrder` exists: the day's list mixes projects, and arranging it
+   * must not rearrange any of them. This writes `dayOrder` and only `dayOrder` —
+   * a project's `order` is never touched, so opening the task's project
+   * afterwards shows the list as it was.
+   *
+   * `scope.day` says which list, and `scope.today` whether overdue work is in it
+   * (it is, for today and for no other day); see `tasksOnDay`. Both the task and
+   * `afterId` have to be on that list, or this throws before staging anything: a
+   * drop beside a row that is not in the list has no position to take.
+   *
+   * Usually one task is written. When the neighbours' keys are equal there is no
+   * key to mint between them, so the run of equal keys is re-keyed with it; see
+   * `placeInDay`.
+   */
+  reorderInDay(id: string, afterId: string | null, scope: DayScope): Staged<Task | null> {
+    const task = this.store.get("task", id);
+    if (task === null) return { result: null, ops: [] };
+
+    const list = tasksOnDay(this.store.all("task"), scope);
+    if (!list.some((candidate) => candidate.id === id)) {
+      throw new Error(`${id} is not on the list for ${scope.day}`);
+    }
+
+    const ops = placeInDay(list, id, afterId).map((placed) =>
+      this.store.mutate("task", placed.id, { dayOrder: placed.dayOrder }),
+    );
+    return { result: this.store.get("task", id), ops };
   }
 
   addLabel(taskId: string, name: string): Staged<Task | null> {

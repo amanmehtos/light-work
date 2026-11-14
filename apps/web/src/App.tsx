@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { compareOrder, type Op, type Priority, type Section, type Task } from "@light/core";
-import { searchTasks, type RescheduleTarget } from "@light/client-sdk";
+import { searchTasks, type DayScope, type RescheduleTarget } from "@light/client-sdk";
 import { loadSession, logout, readConsentRequest, type StoredSession } from "./auth.js";
 import { Sky, ThemeToggle, describeLight, useDiurnal, useScrolled } from "./diurnal.js";
 import { useLightWeek } from "./store-hook.js";
@@ -15,7 +15,17 @@ import { SectionHeading } from "./components/SectionHeading.js";
 import { Sidebar, type View } from "./components/Sidebar.js";
 import { TaskEditor } from "./components/TaskEditor.js";
 import { TaskRow } from "./components/TaskRow.js";
-import { headingUnder, neighbour, planReorder, planSectionMove, rowUnder } from "./reorder.js";
+import {
+  countRows,
+  dayLabel,
+  groupByDay,
+  onPageDays,
+  planDayReorder,
+  siblingBeside,
+  todayRows,
+  type DayGroup,
+} from "./days.js";
+import { dayUnder, headingUnder, neighbour, planReorder, planSectionMove, rowUnder } from "./reorder.js";
 import { atDay, dueDay, localDay } from "./schedule.js";
 import { isTypingTarget, moveSelection, selectionAfterRemoval, type Shortcut } from "./shortcuts.js";
 import { groupBySection, onPage, type Group } from "./sections.js";
@@ -101,7 +111,7 @@ function Workspace({
 
   // `revision` is the dependency that matters: the store lives outside React,
   // so this recomputes when it changes rather than when props do.
-  const { rows, groups, visibleRows, sectionIds, counts, inboxProjectId, namedProjects } = useMemo(() => {
+  const { rows, groups, agenda, visibleRows, sectionIds, counts, labelCounts, inboxProjectId, namedProjects } = useMemo(() => {
     // With rewards off the project and its contents go quiet together —
     // leaving the trophies loose in Today would be the opposite of hiding it.
     const hidden = new Set(
@@ -117,20 +127,19 @@ function Workspace({
     const index = indexTasks(all);
     const open = all.filter((task) => !task.isCompleted);
     const completed = all.filter((task) => task.isCompleted);
-    // Through `dueDay`, not off the front of the string: a timed task stores
-    // a UTC instant, and slicing it puts a 23:00 task on the wrong day.
-    const dueBy = (task: Task) => dueDay(task.due);
+    // Today and Upcoming are arranged once, here, and both what is drawn and what
+    // the sidebar counts are read off these: a count that was a separate pass
+    // over the same tasks is a count that can drift from its list. Neither
+    // depends on which view is showing, because the sidebar shows both at once.
+    // Through `dueDay`, not off the front of the string: a timed task stores a
+    // UTC instant, and slicing it puts a 23:00 task on the wrong day.
+    const day = { today, dayOf: dueDay };
+    const todayArranged = todayRows(open, index, day);
+    const upcomingGroups = groupByDay(open, index, day);
 
-    const todayTasks = open.filter((task) => {
-      const day = dueBy(task);
-      return day !== null && day <= today;
-    });
-    const upcoming = open.filter((task) => {
-      const day = dueBy(task);
-      return day !== null && day > today;
-    });
-
-    let list: Task[];
+    // Everything else is a flat list that is arranged around its subtasks and,
+    // for a project, its sections.
+    let list: Task[] = [];
     switch (view.kind) {
       case "search":
         // Everything the account holds, finished work included — finding the
@@ -138,15 +147,6 @@ function Workspace({
         // trophies when rewards are off. The order is `searchTasks`' own, which
         // is the whole point of it being shared with the agent.
         list = searchTasks(store, query).filter((task) => !hidden.has(task.projectId));
-        break;
-      case "today":
-        list = todayTasks;
-        break;
-      case "upcoming":
-        list = [...upcoming].sort((a, b) => (dueBy(a) ?? "").localeCompare(dueBy(b) ?? ""));
-        break;
-      case "all":
-        list = open;
         break;
       case "completed":
         // Most recently finished first, which is the only ordering that makes
@@ -161,19 +161,22 @@ function Workspace({
         // left the sidebar's count for the project larger than what it listed.
         list = open.filter((task) => task.projectId === view.projectId);
         break;
+      case "label":
+        list = open.filter((task) => task.labelIds.includes(view.labelId));
+        break;
+      case "today":
+      case "upcoming":
       case "day":
-        // The day view reads the store itself, because what it needs — timed
-        // against untimed — is not a filter of one list.
-        list = [];
+        // Today and Upcoming are `todayArranged` and `upcomingGroups`; the day
+        // view reads the store itself, because what it needs — timed against
+        // untimed — is not a filter of one list.
         break;
     }
 
-    if (
-      view.kind !== "upcoming" &&
-      view.kind !== "completed" &&
-      view.kind !== "day" &&
-      view.kind !== "search"
-    ) {
+    // A project and a label are in the order their tasks were filed in. Today
+    // and Upcoming are not: they are in the order of the day (`dayOrder`), which
+    // is what lets a person arrange Today without arranging any project.
+    if (view.kind === "project" || view.kind === "label") {
       list = [...list].sort((a, b) => compareOrder(a.order, b.order));
     }
 
@@ -182,8 +185,20 @@ function Workspace({
     // stands alone, naming its parent, when it is not. Completed is a record and
     // search finds the subtask itself, so those two stay flat.
     const flat = view.kind === "search" || view.kind === "completed";
+    const agenda: DayGroup[] | null =
+      view.kind === "today"
+        ? [{ day: today, rows: todayArranged }]
+        : view.kind === "upcoming"
+          ? upcomingGroups
+          : null;
     const rows: Row[] =
-      view.kind === "day" ? [] : flat ? flatRows(list, index) : arrangeSubtasks(list, index);
+      agenda !== null
+        ? agenda.flatMap((group) => group.rows)
+        : view.kind === "day"
+          ? []
+          : flat
+            ? flatRows(list, index)
+            : arrangeSubtasks(list, index);
 
     // Sections only mean something inside one project.
     const groups: Group[] | null =
@@ -193,38 +208,41 @@ function Workspace({
             store.all("section").filter((section) => section.projectId === view.projectId),
           )
         : null;
-    const visibleRows = groups !== null ? onPage(groups) : rows.filter((row) => !row.hidden);
+    const visibleRows = groups !== null ? onPage(groups) : agenda !== null ? onPageDays(agenda) : rows.filter((row) => !row.hidden);
 
     // What is on the page, in the order it is on the page: this is what `j` and
     // `k` walk, so a row inside a folded parent or a folded section is not
-    // selectable — there is nothing there to select.
+    // selectable — there is nothing there to select. In Upcoming that is down
+    // through the days, one after another, as they are drawn.
     const sectionIds = new Set(
       groups === null ? [] : groups.flatMap((group) => (group.section === null ? [] : [group.section.id])),
     );
 
     const inbox = store.all("project").find((project) => project.isInbox);
 
-    // The length of the arrangement, not of the list it was made from. Today
+    // The length of an arrangement, not of the list it was made from. Today
     // that is the same number, because an arrangement never drops a task — and
     // counting through it is what keeps it true if that ever stops being so.
-    // The sidebar shows all four at once while only one is the view being
-    // rendered, so each is arranged on its own. A folded parent hides rows but
-    // not tasks: the count does not move when a chevron does, and the parent's
-    // `2/5` chip says what is inside. Completed does not nest, so it is the
-    // plain length.
+    // A folded parent hides rows but not tasks: the count does not move when a
+    // chevron does, and the parent's `2/5` chip says what is inside. Completed
+    // does not nest, so it is the plain length.
     const counted = (tasks: Task[]) => arrangeSubtasks(tasks, index).length;
+    const withLabel = new Map<string, number>(
+      store.all("label").map((label) => [label.id, counted(open.filter((task) => task.labelIds.includes(label.id)))]),
+    );
 
     return {
       rows,
       groups,
+      agenda,
       visibleRows,
       sectionIds,
       counts: {
-        today: counted(todayTasks),
-        upcoming: counted(upcoming),
-        all: counted(open),
+        today: todayArranged.length,
+        upcoming: countRows(upcomingGroups),
         completed: completed.length,
       },
+      labelCounts: withLabel,
       // No fall back to "whichever project is first": a task with nowhere said
       // belongs in the inbox, and `addTask` makes one if there is not yet one.
       inboxProjectId: inbox?.id ?? null,
@@ -300,7 +318,36 @@ function Workspace({
   // row's neighbour is the one beside it on the screen.
   const visible = visibleRows.map((row) => row.task);
 
+  // How Today and Upcoming are arranged is `dayOrder`, and it is written by
+  // `reorderInDay`, never by `reorderTask`: a day's list mixes projects, and
+  // rearranging it must leave every project's own order as it was. `scopeFor`
+  // names the list in the terms the operation reads it — the same ones
+  // `days.ts` drew it with, so the drop is placed in the list that is on screen.
+  const scopeFor = (day: string): DayScope => ({ day, today, dayOf: dueDay });
+  const agendaGroupOf = (taskId: string): DayGroup | undefined =>
+    agenda?.find((group) => group.rows.some((row) => row.task.id === taskId));
+
+  function reorderInDay(task: Task, afterId: string | null, day: string) {
+    try {
+      commit(ops.reorderInDay(task.id, afterId, scopeFor(day)).ops);
+    } catch {
+      // The task or its neighbour left the day's list since this was drawn —
+      // finished, or rescheduled on another device. Nothing was staged.
+    }
+  }
+
   function move(task: Task, direction: -1 | 1) {
+    if (agenda !== null) {
+      // Within the day it is drawn under. The button does not carry a task over
+      // a heading: that is a reschedule, and has its own menu.
+      const group = agendaGroupOf(task.id);
+      const beside = group === undefined ? null : siblingBeside(group.rows, task.id, direction);
+      if (group === undefined || beside === null) return;
+      const plan = planDayReorder(group.rows, task.id, beside, direction === 1 ? "after" : "before");
+      if (plan !== null) reorderInDay(task, plan.afterId, group.day);
+      return;
+    }
+
     // The neighbour that shares the row's list — same project, section and
     // parent. With subtasks indented under their parents the row below is as
     // often a child as a sibling, and a child is not somewhere to land after.
@@ -333,12 +380,43 @@ function Workspace({
     commit(ops.updateTask(task.id, { priority }).ops);
   }
 
-  // Dragging a row only means something in a list that is ordered by `order`.
-  // Upcoming is ordered by date and Completed by when each was finished, so a
-  // dropped row would have nowhere to be; they keep the buttons alone.
-  const reorderable = view.kind === "project" || view.kind === "today" || view.kind === "all";
+  // Dragging a row means something wherever the order is one a person sets: a
+  // project's `order`, or a day's `dayOrder` (Today, and each day of Upcoming,
+  // where a drop on another day is also a reschedule). Completed is ordered by
+  // when each was finished, so a dropped row would have nowhere to be.
+  const reorderable =
+    view.kind === "project" || view.kind === "label" || view.kind === "today" || view.kind === "upcoming";
+
+  function dropOnDay(task: Task, event: PointerEvent) {
+    // Today is one list; in Upcoming the day is whichever one the pointer was
+    // let go over, found from the page the same way a section heading is.
+    const day = view.kind === "today" ? today : dayUnder(event.clientX, event.clientY);
+    if (day === null) return;
+
+    if (view.kind === "upcoming" && dueDay(task.due) !== day) {
+      // Another day: that is the whole act, a reschedule. Through `pickDay`, so
+      // a time and a repeat's phrase survive the move exactly as they do from
+      // the row's date menu. It lands in the day's list by its own key; placing
+      // it beside the row it was dropped on is left out, because the key it has
+      // may be from the day it left and a second write to correct it is a guess
+      // about what the person meant by the drop.
+      pickDay(task, day);
+      return;
+    }
+
+    // The same day: a rearrangement of it. Over a row, beside that row.
+    const over = rowUnder(event.clientX, event.clientY);
+    const group = agenda?.find((candidate) => candidate.day === day);
+    if (over === null || group === undefined) return;
+    const plan = planDayReorder(group.rows, task.id, over.id, over.side);
+    if (plan !== null) reorderInDay(task, plan.afterId, day);
+  }
 
   function drop(task: Task, event: PointerEvent) {
+    if (agenda !== null) {
+      dropOnDay(task, event);
+      return;
+    }
     const over = rowUnder(event.clientX, event.clientY);
     if (over === null) {
       // Not over a row: a section heading is the other thing a task can be let
@@ -593,7 +671,9 @@ function Workspace({
               ? "Completed"
               : view.kind === "search"
                 ? "Search"
-                : "All tasks";
+                : // A label that was deleted on another device while it was the
+                  // view: it names itself no more, and the list is empty.
+                  `@${store.get("label", view.labelId)?.name ?? "label"}`;
 
   function addSection(projectId: string, name: string) {
     commit(ops.createSection({ projectId, name }).ops);
@@ -704,6 +784,7 @@ function Workspace({
             view={view}
             onSelect={selectView}
             counts={counts}
+            labelCounts={labelCounts}
             today={today}
             rewardsEnabled={rewardsEnabled}
           />
@@ -766,10 +847,37 @@ function Workspace({
                       ? "Nothing scheduled ahead."
                       : view.kind === "completed"
                         ? "Nothing finished yet."
-                        : "No tasks here yet."}
+                        : view.kind === "label"
+                          ? "No open tasks carry this label."
+                          : "No tasks here yet."}
               </p>
               {view.kind === "project" && <AddSection onAdd={(name) => addSection(view.projectId, name)} />}
             </>
+          ) : view.kind === "upcoming" && agenda !== null ? (
+            // A heading per day, and every day is a drop target whether or not
+            // anything is due on it: see `dayUnder`. The rows in a day are
+            // `arrangeSubtasks` of that day's list, so a parent and its subtasks
+            // nest within a day and a subtask whose parent is due another day
+            // stands alone, naming it — the same rule as every other list.
+            agenda.map((group) => {
+              const label = dayLabel(group.day, today);
+              return (
+                <section className="section day-group" key={group.day} data-day={group.day}>
+                  <div className="section-heading__bar">
+                    <h2 className="section-heading__name">{label.name}</h2>
+                    {label.date !== "" && <span className="dn-hint">{label.date}</span>}
+                    <span className="dn-badge" title={`${group.rows.length} task${group.rows.length === 1 ? "" : "s"}`}>
+                      {group.rows.length}
+                    </span>
+                  </div>
+                  {group.rows.length === 0 ? (
+                    <p className="dn-hint day-group__empty">Nothing yet. Drag a task here to schedule it.</p>
+                  ) : (
+                    <ul className="tasks">{group.rows.filter((row) => !row.hidden).map(renderRow)}</ul>
+                  )}
+                </section>
+              );
+            })
           ) : groups === null ? (
             <ul className="tasks">{rows.filter((row) => !row.hidden).map(renderRow)}</ul>
           ) : (

@@ -148,11 +148,12 @@ try {
     .waitFor({ state: "detached", timeout: 10_000 });
   check("completing removes it from Today", true);
 
-  // Every list view shows open work; finished tasks have their own view, which
+  // Today and Upcoming show open work; finished tasks have their own view, which
   // is also where imported history lands.
-  await page.getByRole("button", { name: "All tasks" }).click();
+  await page.getByRole("button", { name: "Upcoming" }).click();
+  await page.getByRole("heading", { name: "Upcoming" }).waitFor();
   check(
-    "All tasks shows only open work",
+    "Upcoming shows only open work",
     (await page.locator(".task", { hasText: "Ready publisher pitch deck" }).count()) === 0,
   );
 

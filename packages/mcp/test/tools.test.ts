@@ -473,6 +473,57 @@ describe("reorder_tasks", () => {
     expect(response.isError).toBe(true);
     expect(response.content[0]!.text).toContain("Unknown task ids");
   });
+
+  describe("with a day", () => {
+    async function twoProjectsDueToday() {
+      const work = (await call("create_project", { name: "Work" })).structuredContent.project;
+      const home = (await call("create_project", { name: "Home" })).structuredContent.project;
+      const make = async (projectId: string, content: string) =>
+        (await call("create_task", { projectId, content, due: { date: TODAY } })).structuredContent.task;
+      return { work, home, w: await make(work.id, "w"), h: await make(home.id, "h") };
+    }
+
+    it("arranges the day across projects, and says where each task now sorts", async () => {
+      const { w, h } = await twoProjectsDueToday();
+      const response = await call("reorder_tasks", { taskIds: [h.id, w.id], day: TODAY });
+      expect(response.isError).toBeUndefined();
+      expect(response.structuredContent.list.map((item: { content: string }) => item.content)).toEqual(["h", "w"]);
+
+      // The agent can read the result back: dayOrder is on the task now.
+      const listed = await call("list_tasks", {});
+      const byContent = Object.fromEntries(listed.structuredContent.tasks.map((t: any) => [t.content, t]));
+      expect(typeof byContent.h.dayOrder).toBe("string");
+    });
+
+    it("leaves every project's own order alone", async () => {
+      const { work, home, w, h } = await twoProjectsDueToday();
+      const order = async (projectId: string) =>
+        (await call("list_tasks", { projectId })).structuredContent.tasks.map((t: { content: string }) => t.content);
+      const [workBefore, homeBefore] = [await order(work.id), await order(home.id)];
+      const tasksBefore = session.context.store.all("task").map((t) => [t.id, t.order]);
+
+      await call("reorder_tasks", { taskIds: [h.id, w.id], day: TODAY });
+
+      expect(await order(work.id)).toEqual(workBefore);
+      expect(await order(home.id)).toEqual(homeBefore);
+      expect(session.context.store.all("task").map((t) => [t.id, t.order])).toEqual(tasksBefore);
+    });
+
+    it("does not insist the tasks are siblings, but does insist they are on that day", async () => {
+      const { w, h } = await twoProjectsDueToday();
+      const later = (
+        await call("create_task", { projectId: (await call("create_project", { name: "X" })).structuredContent.project.id, content: "later", due: { date: "2026-11-02" } })
+      ).structuredContent.task;
+      const response = await call("reorder_tasks", { taskIds: [w.id, later.id, h.id], day: TODAY });
+      expect(response.isError).toBe(true);
+      expect(response.content[0]!.text).toContain(later.id);
+    });
+
+    it("leaves dayOrder off a task that has none", async () => {
+      const { task } = await seed();
+      expect("dayOrder" in task && task.dayOrder !== undefined).toBe(false);
+    });
+  });
 });
 
 describe("move_task", () => {

@@ -115,7 +115,8 @@ public struct Task: Codable, Sendable, Identifiable, Equatable {
     public var completedAt: String?
     public var createdAt: String
     /// The task's place in the Today and Upcoming lists, kept apart from
-    /// `order`. Read so that it round-trips; nothing here arranges by it yet.
+    /// `order`. Read, and sorted by in `Agenda`; written only by the web, which
+    /// is where a day is rearranged.
     public var dayOrder: String? = nil
     /// Whether the task's subtasks are folded away. Synced, so a task folded on
     /// the laptop is folded here.

@@ -137,6 +137,28 @@ export function headingUnder(
   return heading?.dataset.sectionId ?? null;
 }
 
+/**
+ * The day under a point, or null. Upcoming's day groups are drop targets: a row
+ * let go anywhere in one — its heading, its rows, or the empty space of a day
+ * with nothing due — is rescheduled to that day.
+ *
+ * Asked the same way as `headingUnder` and `rowUnder`, from the pointer's
+ * position and the page's own markup, rather than by comparing rectangles as
+ * `Day.tsx`'s `landingAt` does. That one has exactly two fixed targets, the
+ * rail and the grid, and measures minutes within the grid; this has as many
+ * targets as there are days, and which one is under the pointer is what
+ * `elementFromPoint` already knows. `Draggable` is the shared half — the pickup,
+ * the threshold, the teardown — and `onLand` is the seam each list lands through.
+ */
+export function dayUnder(
+  x: number,
+  y: number,
+  doc: Pick<Document, "elementFromPoint"> = document,
+): string | null {
+  const group = doc.elementFromPoint(x, y)?.closest<HTMLElement>("[data-day]");
+  return group?.dataset.day ?? null;
+}
+
 /** The half of `rect` the pointer is on. Exported with the rest so it is testable without a DOM. */
 export function sideOf(pointerY: number, top: number, height: number): Side {
   return pointerY < top + height / 2 ? "before" : "after";

@@ -483,6 +483,12 @@ html, body, #root { height: 100%; }
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 
+/* A day in Upcoming is a section whose heading is a date. The whole group is the
+   drop target (`data-day`), so a day with nothing due keeps enough height to be
+   aimed at. */
+.day-group { min-height: 4rem; }
+.day-group__empty { margin: 0; padding: 0.25rem 0.25rem 0; }
+
 .add-section { margin-top: 1.25rem; }
 .add-section--open { display: flex; gap: 0.5rem; align-items: center; max-width: 24rem; }
 .add-section--open .dn-input { flex: 1; }

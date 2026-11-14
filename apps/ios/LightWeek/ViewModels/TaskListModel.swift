@@ -43,14 +43,29 @@ final class TaskListModel: ObservableObject {
         var id: String { row.id }
     }
 
-    /// A run of entries under one section heading, or the ones above the first.
-    /// `section` is nil for the unsectioned rows, and for a list that is not one
-    /// project's, which has no headings at all.
+    /// A run of entries under one heading, or the ones above the first.
+    ///
+    /// The heading is a section when the list is one project's, or a day when it
+    /// is Upcoming: a view has one grouping axis, chosen by the view, and never
+    /// both (see `Agenda`). Both are nil for the unheaded rows, and for a list
+    /// with no headings at all.
     struct Block: Identifiable {
         var section: LightKit.Section?
+        /// `YYYY-MM-DD`, for an Upcoming day.
+        var day: String?
         var entries: [Entry]
 
-        var id: String { section?.id ?? "" }
+        var id: String { section?.id ?? day ?? "" }
+    }
+
+    /// What the home list says about each place, each the length of the rows
+    /// that place renders — see `Agenda` — so the badge and the list cannot
+    /// disagree, and the web's sidebar says the same numbers for the same account.
+    struct Counts {
+        var inbox = 0
+        var today = 0
+        var upcoming = 0
+        var done = 0
     }
 
     @Published private(set) var rows: [Row] = []
@@ -142,9 +157,9 @@ final class TaskListModel: ObservableObject {
     /// what the phone used to sort by outright — so a list rearranged in the
     /// browser opened in a different order here.
     ///
-    /// Each project numbers its own list, so across projects the keys say little;
-    /// the web's All view sorts the same way regardless, and agreeing with it
-    /// matters more than inventing a better cross-project rule on one side.
+    /// This is a project's order. Today and Upcoming are not in it: they sort by
+    /// `dayOrder` where a task has one (`Agenda`), which is how a day can be
+    /// arranged on the web without arranging any project.
     static func inListOrder(_ a: LightKit.Task, _ b: LightKit.Task) -> Bool {
         if a.order != b.order { return a.order < b.order }
         if a.priority.rawValue != b.priority.rawValue {
@@ -168,36 +183,82 @@ final class TaskListModel: ObservableObject {
             .sorted { ($0.task.completedAt ?? "") > ($1.task.completedAt ?? "") }
     }
 
-    /// The open tasks, arranged for the screen: subtasks beneath their parents
-    /// and, inside one project, under their section headings.
+    /// A project's open tasks, arranged for the screen: subtasks beneath their
+    /// parents, under their section headings.
     ///
     /// Everything about *what the arrangement is* lives in `Outline`, the twin of
     /// the web's, so the two clients cannot read the same account differently.
-    /// This only attaches the rest of what a row needs. `project` is nil for the
-    /// whole-account list, which spans projects and so has no headings.
-    func blocks(in project: Project?) -> [Block] {
-        let open = openRows
-        let scoped = project.map { project in open.filter { $0.task.projectId == project.id } } ?? open
-        let byId = Dictionary(scoped.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let arranged = Outline.arrange(scoped.map(\.task), among: all)
-
-        func entries(_ rows: [Outline.Row]) -> [Entry] {
-            rows.compactMap { outline in byId[outline.id].map { Entry(row: $0, outline: outline) } }
-        }
-
-        guard let project else { return [Block(section: nil, entries: entries(arranged))] }
+    /// This only attaches the rest of what a row needs.
+    func blocks(in project: Project) -> [Block] {
+        let scoped = openRows.filter { $0.task.projectId == project.id }.map(\.task)
+        let arranged = Outline.arrange(scoped, among: all)
         return Outline
             .groups(arranged, sections: sections.filter { $0.projectId == project.id })
-            .map { Block(section: $0.section, entries: entries($0.rows)) }
+            .map { Block(section: $0.section, day: nil, entries: entries($0.rows)) }
     }
 
     /// Completed tasks as one block, flat: a record of what was done, not a plan,
     /// so nothing nests and nothing is folded.
     func completedBlocks() -> [Block] {
-        [Block(section: nil, entries: completedRows.map {
+        [Block(section: nil, day: nil, entries: completedRows.map {
             Entry(row: $0, outline: Outline.flat($0.task))
         })]
     }
+
+    /// Entries for rows an arrangement produced: the task's row, beside where it
+    /// sits. Rows the model does not hold (a hidden project's) are left out.
+    private func entries(_ arranged: [Outline.Row]) -> [Entry] {
+        let byId = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return arranged.compactMap { outline in byId[outline.id].map { Entry(row: $0, outline: outline) } }
+    }
+
+    private var openTasks: [LightKit.Task] { openRows.map(\.task) }
+    private var todayLocal: String { Schedule.localDay(Date()) }
+
+    /// Today: everything due on or before today, overdue included, in the order
+    /// the web shows it — `dayOrder` where the task has one.
+    func todayBlocks() -> [Block] {
+        let arranged = Agenda.today(open: openTasks, today: todayLocal, among: all)
+        return [Block(section: nil, day: nil, entries: entries(arranged))]
+    }
+
+    /// Upcoming, a heading per day that has something on it.
+    ///
+    /// Read-only on the phone. The web's version is also a place to drag a task
+    /// from one day to another, and that is not done here: this client is not
+    /// local-first, every write is pushed at once and the screen reloaded if the
+    /// push fails, which is honest for a checkbox and not for a rearrangement — a
+    /// failed push would visibly reshuffle a list the person had just arranged.
+    /// A day with nothing due has no heading here, because there is nothing to
+    /// drop on it; the counts are the same either way.
+    func upcomingBlocks() -> [Block] {
+        Agenda.upcoming(open: openTasks, today: todayLocal, among: all)
+            .filter { !$0.rows.isEmpty }
+            .map { Block(section: nil, day: $0.day, entries: entries($0.rows)) }
+    }
+
+    var counts: Counts {
+        let open = openTasks
+        let today = todayLocal
+        return Counts(
+            inbox: inbox.map { project in open.filter { $0.projectId == project.id }.count } ?? 0,
+            today: Agenda.today(open: open, today: today, among: all).count,
+            upcoming: Agenda.count(Agenda.upcoming(open: open, today: today, among: all)),
+            done: completedRows.count)
+    }
+
+    /// Open tasks in a project, as the web's sidebar counts them.
+    func openCount(in project: Project) -> Int {
+        openRows.filter { $0.task.projectId == project.id }.count
+    }
+
+    /// The projects as a tree, for the home list.
+    var projectTree: [Navigation.Entry] {
+        Navigation.projectTree(projects, rewardsEnabled: rewardsEnabled)
+    }
+
+    /// The inbox, if the account has one. Only the web makes one.
+    var inbox: Project? { Navigation.inbox(visibleProjects) }
 
     /// The open tasks on a given day, split into the timed and the waiting —
     /// which is exactly the shape the day view draws.
@@ -242,9 +303,8 @@ final class TaskListModel: ObservableObject {
     /// by hand. Nowhere is possible: only the web makes an inbox, and an
     /// account that has never been opened there has no project at all.
     var defaultProject: Project? {
-        let usable = projects.filter { !$0.isArchived && !$0.isRewards }
-        if let inbox = usable.filter(\.isInbox).min(by: { $0.id < $1.id }) { return inbox }
-        return usable.min(by: { $0.order < $1.order })
+        if let inbox { return inbox }
+        return movableProjects.min(by: { $0.order < $1.order })
     }
 
     /// Adds a task to the end of a project's list.

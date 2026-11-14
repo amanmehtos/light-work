@@ -17,6 +17,7 @@ import {
   parseRecurrence,
   QuickAddRefusal,
   searchTasks,
+  tasksOnDay,
   type RescheduleTarget,
 } from "@light/client-sdk";
 import { z } from "zod";
@@ -670,19 +671,69 @@ export function buildTools(): ToolDefinition[] {
         "order at the top of their list, and any sibling you leave out keeps its relative " +
         "position after them — so pass the whole list when you care where everything " +
         "lands. Only the tasks that move are written, which is what lets two devices " +
-        "reorder different lists without conflicting.",
+        "reorder different lists without conflicting. Pass `day` to arrange a day's list " +
+        "instead — what Today or one day of Upcoming shows, across projects — which sets each " +
+        "task's dayOrder and leaves every project's own order alone.",
       readOnly: false,
       inputSchema: {
         taskIds: z
           .array(z.string())
           .min(1)
-          .describe("Sibling task ids, in the desired order. All must share one list."),
+          .describe(
+            "Task ids, in the desired order. Without `day`, all must be siblings sharing one " +
+              "list. With `day`, all must be open tasks on that day's list.",
+          ),
+        day: z
+          .string()
+          .optional()
+          .describe(
+            "YYYY-MM-DD. Arrange that day's list rather than a project's. Today's list also " +
+              "holds overdue tasks; no other day's does.",
+          ),
       },
       handler: async (args, context) => {
         const ids = args.taskIds as string[];
         const tasks = ids.map((id) => context.store.get("task", id));
         const missing = ids.filter((_id, index) => tasks[index] === null);
         if (missing.length > 0) return failure(`Unknown task ids: ${missing.join(", ")}.`);
+
+        if (typeof args.day === "string") {
+          // A day's list is not a sibling list, so the sibling check below does
+          // not apply: the tasks come from any project, and what has to hold is
+          // that every one of them is on the day named.
+          const scope = {
+            day: args.day,
+            today: context.today(),
+            // The same slice every other date in this file reads, so the list
+            // an agent arranges is the list `list_tasks` would have shown it.
+            dayOf: (due: Due | null) => (due === null ? null : dayOf(due.date)),
+          };
+          const onList = new Set(tasksOnDay(context.store.all("task"), scope).map((task) => task.id));
+          const off = ids.filter((id) => !onList.has(id));
+          if (off.length > 0) {
+            return failure(
+              `Not on the list for ${args.day}: ${off.join(", ")}. A day's list is the open ` +
+                "tasks due that day (and, for today, anything overdue).",
+            );
+          }
+          const staged = [];
+          let previous: string | null = null;
+          for (const id of ids) {
+            // Each step reads the store the last one wrote, so the listed tasks
+            // end up in the order given, at the top of the day.
+            staged.push(...context.ops.reorderInDay(id, previous, scope).ops);
+            previous = id;
+          }
+          await context.flush(staged);
+          return result({
+            reordered: staged.length,
+            day: args.day,
+            list: tasksOnDay(context.store.all("task"), scope).map((task) => ({
+              id: task.id,
+              content: task.content,
+            })),
+          });
+        }
 
         const first = tasks[0]!;
         const mismatched = tasks.filter(
