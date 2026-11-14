@@ -81,6 +81,7 @@ public actor LightWeekClient {
             public var section: [Section]?
             public var task: [Task]?
             public var label: [Label]?
+            public var comment: [Comment]?
             public var focusSession: [FocusSession]?
             public var preference: [Preference]?
         }

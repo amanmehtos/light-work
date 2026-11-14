@@ -79,3 +79,16 @@ describe("searchTasks", () => {
     expect(titles("pitch")).toEqual(["finished pitch"]);
   });
 });
+
+describe("comments", () => {
+  it("are not searched: a hit the row cannot show is a result nobody can explain", () => {
+    // The decision is recorded here so that adding comments to `searchTasks`
+    // is a deliberate change to this file and not a drive-by. A row shows the
+    // title, the labels and the notes — everything search matches on — but a
+    // comment is read only inside the editor sheet, so a task listed "for" a
+    // word that appears nowhere on its row would look like a wrong answer.
+    const task = add("call the plumber");
+    ops.addComment(task.id, "ask about the boiler");
+    expect(titles("boiler")).toEqual([]);
+  });
+});

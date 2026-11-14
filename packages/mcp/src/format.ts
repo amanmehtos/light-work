@@ -9,7 +9,8 @@
  * is for arithmetic, the other for explaining itself back to the user.
  */
 
-import type { Label, Project, Section, Task } from "@light/core";
+import type { Comment, Label, Project, Section, Task } from "@light/core";
+import { postedTime } from "@light/client-sdk";
 import type { ToolContext } from "./context.js";
 
 export function humanDuration(seconds: number): string {
@@ -106,6 +107,19 @@ export function formatSection(store: ToolContext["store"], section: Section) {
     openTasks: store
       .all("task")
       .filter((task) => task.sectionId === section.id && !task.isCompleted).length,
+  };
+}
+
+export function formatComment(comment: Comment) {
+  return {
+    id: comment.id,
+    content: comment.content,
+    // Absent when the import had no date for it, rather than an epoch that
+    // reads as a real one.
+    postedAt: postedTime(comment) === null ? undefined : comment.postedAt,
+    // Only the name: the file itself sits at a Todoist URL an agent cannot
+    // open from here, and a link it cannot follow is noise in its context.
+    attachment: comment.attachment == null ? undefined : comment.attachment.fileName || "an attachment",
   };
 }
 

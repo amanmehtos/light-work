@@ -772,3 +772,92 @@ describe("sections", () => {
     expect(kept.section).toBeUndefined();
   });
 });
+
+describe("comments", () => {
+  it("add_comment writes to the task and list_comments reads both back", async () => {
+    const { task } = await seed();
+    const first = (await call("add_comment", { taskId: task.id, content: "  Lead with economics. " }))
+      .structuredContent.comment;
+    expect(first.content).toBe("Lead with economics.");
+    await call("add_comment", { taskId: task.id, content: "Second thought." });
+
+    const listed = (await call("list_comments", { taskId: task.id })).structuredContent;
+    expect(listed.total).toBe(2);
+    // Deliberately a set, not a sequence. Two comments added in the same
+    // millisecond carry the same `postedAt`, and the tiebreak is the id —
+    // which is a millisecond prefix plus sixteen random characters, so their
+    // relative order is a coin flip. Asserting creation order here failed
+    // about half the time. Ordering is tested below, where the times differ.
+    expect(listed.comments.map((c: { content: string }) => c.content).sort()).toEqual([
+      "Lead with economics.",
+      "Second thought.",
+    ]);
+    expect(server.liveCount("comment")).toBe(2);
+  });
+
+  it("lists a thread oldest first when the comments were posted at different times", async () => {
+    const { task } = await seed();
+    const { store, flush } = session.context;
+    // Explicit timestamps, because that is the promise: oldest first by when
+    // it was posted. The id tiebreak only decides comments posted in the same
+    // millisecond, and it decides them the same way on every device, which is
+    // what a replicated thread needs more than it needs local creation order.
+    await flush([
+      store.mutate("comment", "late", {
+        id: "late", taskId: task.id, projectId: null, content: "Afterthought",
+        postedAt: "2026-11-14T12:00:00.000Z", postedById: null, attachment: null,
+      }),
+      store.mutate("comment", "early", {
+        id: "early", taskId: task.id, projectId: null, content: "First word",
+        postedAt: "2026-11-14T09:00:00.000Z", postedById: null, attachment: null,
+      }),
+    ]);
+
+    const listed = (await call("list_comments", { taskId: task.id })).structuredContent;
+    expect(listed.comments.map((c: { content: string }) => c.content)).toEqual([
+      "First word",
+      "Afterthought",
+    ]);
+  });
+
+  it("reads one the import wrote, without its epoch date or its file URL", async () => {
+    const { task } = await seed();
+    const { store, flush } = session.context;
+    await flush([
+      store.mutate("comment", "c1", {
+        id: "c1",
+        taskId: task.id,
+        projectId: null,
+        content: "Deck v3",
+        attachment: { fileName: "deck.pdf", fileType: "application/pdf", fileUrl: "https://example.com/deck.pdf", fileSize: 2048 },
+        postedById: "todoist-uid-1234",
+        postedAt: new Date(0).toISOString(),
+      }),
+    ]);
+
+    const [comment] = (await call("list_comments", { taskId: task.id })).structuredContent.comments;
+    expect(comment).toEqual({ id: "c1", content: "Deck v3", attachment: "deck.pdf" });
+  });
+
+  it("is read-only to list and refuses a task that is not there, or an empty comment", async () => {
+    expect(tools.get("list_comments")!.readOnly).toBe(true);
+    expect(tools.get("add_comment")!.readOnly).toBe(false);
+
+    const missing = await call("add_comment", { taskId: "ghost", content: "x" });
+    expect(missing.isError).toBe(true);
+    expect(missing.content[0]!.text).toContain("No task");
+    expect((await call("list_comments", { taskId: "ghost" })).isError).toBe(true);
+
+    const { task } = await seed();
+    const blank = await call("add_comment", { taskId: task.id, content: "   " });
+    expect(blank.isError).toBe(true);
+    expect(server.liveCount("comment")).toBe(0);
+  });
+
+  it("delete_task takes the comments with it", async () => {
+    const { task } = await seed();
+    await call("add_comment", { taskId: task.id, content: "gone with it" });
+    await call("delete_task", { taskId: task.id });
+    expect(server.liveCount("comment")).toBe(0);
+  });
+});

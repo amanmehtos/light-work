@@ -72,6 +72,8 @@ final class TaskListModel: ObservableObject {
     @Published private(set) var projects: [Project] = []
     @Published private(set) var sections: [LightKit.Section] = []
     @Published private(set) var labels: [Label] = []
+    /// Every comment the snapshot held. Read-only here; see `Comment`.
+    private var comments: [Comment] = []
     /// On unless it has been switched off. The default lives in one place.
     @Published private(set) var rewardsEnabled = true
     @Published private(set) var isLoading = false
@@ -101,6 +103,7 @@ final class TaskListModel: ObservableObject {
             all = []
             projects = []
             sections = []
+            comments = []
             return
         }
         isLoading = true
@@ -121,6 +124,7 @@ final class TaskListModel: ObservableObject {
         projects = snapshot.entities.project ?? []
         sections = snapshot.entities.section ?? []
         labels = snapshot.entities.label ?? []
+        comments = snapshot.entities.comment ?? []
         all = snapshot.entities.task ?? []
         rewardsEnabled = (snapshot.entities.preference ?? [])
             .first { $0.id == Preference.wellKnownId }?.rewardsEnabled ?? true
@@ -275,6 +279,12 @@ final class TaskListModel: ObservableObject {
         )
     }
 
+    /// A task's comments, oldest first, for the foot of its editor. The
+    /// ordering is `Comment.thread`, the twin of the web's `commentsOnTask`.
+    func thread(for task: LightKit.Task) -> [Comment] {
+        Comment.thread(for: task.id, among: comments)
+    }
+
     func labelNames(for task: LightKit.Task) -> [String] {
         let byId = Dictionary(uniqueKeysWithValues: labels.map { ($0.id, $0.name) })
         return task.labelIds.compactMap { byId[$0] }
@@ -405,9 +415,11 @@ final class TaskListModel: ObservableObject {
     func delete(_ task: LightKit.Task) {
         _Concurrency.Task {
             await write { operations in
-                let deletion = operations.delete(task, among: self.all)
+                let deletion = operations.delete(task, among: self.all, comments: self.comments)
                 let gone = Set(deletion.deleted)
+                let goneComments = Set(deletion.deletedComments)
                 self.all.removeAll { gone.contains($0.id) }
+                self.comments.removeAll { goneComments.contains($0.id) }
                 self.rebuild()
                 return deletion.ops
             }

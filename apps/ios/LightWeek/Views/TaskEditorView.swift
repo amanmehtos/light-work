@@ -128,6 +128,18 @@ struct TaskEditorView: View {
                         Text("Finishing this files the reward in Rewards, to look back on.")
                     }
                 }
+
+                // Read-only, and only when there is something to read: a task
+                // with no comments gets no empty heading. Imported comments are
+                // the reason this is here at all; writing one stays on the web.
+                let thread = model.thread(for: task)
+                if !thread.isEmpty {
+                    SwiftUI.Section("Comments") {
+                        ForEach(thread) { comment in
+                            CommentRow(comment: comment)
+                        }
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
             .background(Color.dnBackground)
@@ -193,5 +205,41 @@ struct TaskEditorView: View {
         parts.hour = minutes / 60
         parts.minute = minutes % 60
         return Calendar.current.date(from: parts) ?? Date()
+    }
+}
+
+/// One comment, as written: text with its line breaks, never parsed as
+/// markdown — `verbatim`, so a Todoist note that happens to contain asterisks
+/// reads the way it was typed — and selectable, so it can be copied out.
+private struct CommentRow: View {
+    let comment: Comment
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !comment.content.isEmpty {
+                Text(verbatim: comment.content)
+                    .font(DiurnalType.body(.callout))
+                    .textSelection(.enabled)
+            }
+            if let attachment = comment.attachment {
+                let name = attachment.fileName.isEmpty ? "An attachment" : attachment.fileName
+                // A link only for a web address: the URL came from an import.
+                if let url = URL(string: attachment.fileUrl),
+                   url.scheme == "https" || url.scheme == "http" {
+                    Link(name, destination: url)
+                        .font(DiurnalType.body(.footnote))
+                } else {
+                    Text(verbatim: name)
+                        .font(DiurnalType.body(.footnote))
+                        .foregroundStyle(Color.dnMuted)
+                }
+            }
+            if let posted = comment.postedDate {
+                Text(posted.formatted(date: .abbreviated, time: .omitted))
+                    .font(DiurnalType.body(.caption))
+                    .foregroundStyle(Color.dnMuted)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }

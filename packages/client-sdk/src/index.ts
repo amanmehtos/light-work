@@ -1,3 +1,4 @@
+export * from "./comments.js";
 export * from "./day-order.js";
 export * from "./operations.js";
 export * from "./parse.js";

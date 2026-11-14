@@ -9,6 +9,7 @@
 
 import {
   DEFAULT_COLOR,
+  type Comment,
   type Due,
   type FocusSession,
   type Label,
@@ -751,7 +752,61 @@ export class Operations {
       ops.push(this.store.remove("task", id));
       deleted.push(id);
     }
+
+    // A comment is the person's own writing, and with its task gone nothing
+    // could reach it: the sheet it is read on is the task's. Nothing cascades
+    // in storage, so each needs its own tombstone.
+    ops.push(...this.removeCommentsOf(deleted));
     return { result: { deleted }, ops };
+  }
+
+  /* ---------------------------------------------------------- */
+  /* comments                                                   */
+  /* ---------------------------------------------------------- */
+
+  /**
+   * Adds a comment to a task.
+   *
+   * Null, with nothing staged, for a task that is not there or text that is
+   * only whitespace: an empty comment is never what anyone meant, and the web
+   * would otherwise have to remember to check. The ends are trimmed and the
+   * inside is not, so a pasted paragraph keeps its line breaks.
+   *
+   * Every field is written, `null` where there is nothing — the same
+   * whole-row write `createTask` does, because a client reading a row with a
+   * key missing cannot tell "not set" from "not sent". `postedById` stays
+   * null for now, as `addedById` does on a task: the account has one person
+   * in it until sharing lands, and an id here would be a claim nothing reads.
+   * Attachments are imported, shown, and not made here.
+   */
+  addComment(taskId: string, content: string, now: Date = new Date()): Staged<Comment | null> {
+    const text = content.trim();
+    if (text === "" || this.store.get("task", taskId) === null) return { result: null, ops: [] };
+
+    const comment: Comment = {
+      id: newId(),
+      taskId,
+      projectId: null,
+      content: text,
+      attachment: null,
+      postedById: null,
+      postedAt: now.toISOString(),
+    };
+    return { result: comment, ops: [this.store.mutate("comment", comment.id, comment)] };
+  }
+
+  deleteComment(id: string): Staged<{ deleted: boolean }> {
+    if (this.store.get("comment", id) === null) return { result: { deleted: false }, ops: [] };
+    return { result: { deleted: true }, ops: [this.store.remove("comment", id)] };
+  }
+
+  /** Tombstones for every comment on any of these tasks. */
+  private removeCommentsOf(taskIds: string[]): Op[] {
+    const gone = new Set(taskIds);
+    return this.store
+      .all("comment")
+      .filter((comment) => comment.taskId !== null && gone.has(comment.taskId))
+      .map((comment) => this.store.remove("comment", comment.id));
   }
 
   /**
@@ -791,6 +846,7 @@ export class Operations {
           collect(child.id);
         }
       }
+      const taskStart = tasks.length;
       for (const task of this.store.all("task").filter((t) => t.projectId === projectId)) {
         ops.push(this.store.remove("task", task.id));
         tasks.push(task.id);
@@ -798,6 +854,12 @@ export class Operations {
       for (const section of this.store.all("section").filter((s) => s.projectId === projectId)) {
         ops.push(this.store.remove("section", section.id));
         sections.push(section.id);
+      }
+      // Comments on its tasks, and the ones on the project itself (an import
+      // keeps those): both go with it, or they outlive the thing they are on.
+      ops.push(...this.removeCommentsOf(tasks.slice(taskStart)));
+      for (const comment of this.store.all("comment").filter((c) => c.projectId === projectId)) {
+        ops.push(this.store.remove("comment", comment.id));
       }
       if (project !== null) {
         ops.push(this.store.remove("project", projectId));

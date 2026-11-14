@@ -17,10 +17,11 @@
 
 import { useEffect, useState } from "react";
 import type { Label, Priority, Project, Task } from "@light/core";
-import type { LightStore, Operations } from "@light/client-sdk";
+import { commentsOnTask, type LightStore, type Operations } from "@light/client-sdk";
 import { compareOrder, type Op } from "@light/core";
 import { Sheet } from "../diurnal.js";
 import { atDay, atTime, clock, dueDay, dueMinutes } from "../schedule.js";
+import { TaskComments } from "./TaskComments.js";
 
 const PRIORITIES: { value: Priority; label: string }[] = [
   { value: 1, label: "p1 — urgent" },
@@ -424,6 +425,17 @@ export function TaskEditor({
             </button>
           </div>
         </form>
+      )}
+
+      {/* Outside the form on purpose: a comment is written when it is added,
+          not when Save is pressed, and Cancel cannot take it back. Keyed by
+          task so a half-typed comment does not follow you to the next one. */}
+      {draft !== null && task !== null && (
+        <TaskComments
+          key={task.id}
+          comments={commentsOnTask(store, task.id)}
+          onAdd={(text) => commit(ops.addComment(task.id, text).ops)}
+        />
       )}
     </Sheet>
   );

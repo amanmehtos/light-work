@@ -257,6 +257,8 @@ public struct Operations: Sendable {
     public struct Deletion: Sendable {
         /// Every id that went, subtasks first and the task itself last.
         public var deleted: [String]
+        /// The comments that went with them.
+        public var deletedComments: [String] = []
         public var ops: [Op]
     }
 
@@ -270,9 +272,22 @@ public struct Operations: Sendable {
     ///
     /// `tasks` is every task the caller knows about, completed ones included —
     /// a finished subtask is still a subtask.
-    public func delete(_ task: Task, among tasks: [Task]) -> Deletion {
+    ///
+    /// `comments` are the ones the caller knows about: those on any task that
+    /// goes get a tombstone too, after the tasks, as `deleteTask` does on the
+    /// web. Without them a comment would outlive its task, and the thread it
+    /// is read in is the task's own sheet — present and unreachable again.
+    public func delete(_ task: Task, among tasks: [Task], comments: [Comment] = []) -> Deletion {
         let deleted = Self.subtaskIds(of: task, among: tasks) + [task.id]
-        return Deletion(deleted: deleted, ops: deleted.map { tombstone(kind: "task", id: $0) })
+        let gone = Set(deleted)
+        let goneComments = comments.compactMap { comment in
+            comment.taskId.map(gone.contains) == true ? comment.id : nil
+        }
+        return Deletion(
+            deleted: deleted,
+            deletedComments: goneComments,
+            ops: deleted.map { tombstone(kind: "task", id: $0) }
+                + goneComments.map { tombstone(kind: "comment", id: $0) })
     }
 
     /// Every task beneath this one, at any depth, deepest first — the order a

@@ -13,6 +13,7 @@
 
 import { compareOrder, type Due, type Priority, type Task } from "@light/core";
 import {
+  commentsOnTask,
   meaning,
   parseRecurrence,
   QuickAddRefusal,
@@ -24,6 +25,7 @@ import { z } from "zod";
 import type { ToolContext } from "./context.js";
 import {
   failure,
+  formatComment,
   formatProject,
   formatSection,
   formatTask,
@@ -229,6 +231,23 @@ export function buildTools(): ToolDefinition[] {
         // which is the order a person reads them down the page.
         sections.sort((a, b) => a.project.path.localeCompare(b.project.path));
         return result({ sections, total: sections.length });
+      },
+    },
+
+    {
+      name: "list_comments",
+      title: "List comments",
+      description:
+        "The comments on one task, oldest first. Comments are the person's own notes on a " +
+        "task — often imported from Todoist — and are not part of its description, so read " +
+        "them when planning around a task rather than assuming the description is all there is.",
+      readOnly: true,
+      inputSchema: { taskId: z.string() },
+      handler: async (args, context) => {
+        const id = String(args.taskId);
+        if (context.store.get("task", id) === null) return failure(`No task with id ${id}.`);
+        const comments = commentsOnTask(context.store, id).map(formatComment);
+        return result({ taskId: id, comments, total: comments.length });
       },
     },
 
@@ -912,6 +931,24 @@ export function buildTools(): ToolDefinition[] {
           movedTasks: staged.result.moved.length,
           taskIds: staged.result.moved,
         });
+      },
+    },
+
+    {
+      name: "add_comment",
+      title: "Add a comment",
+      description:
+        "Adds a comment to a task. Use it to leave a note the person should see on the task " +
+        "(what you tried, why you moved it) rather than rewriting its description.",
+      readOnly: false,
+      inputSchema: { taskId: z.string(), content: z.string().min(1) },
+      handler: async (args, context) => {
+        const id = String(args.taskId);
+        if (context.store.get("task", id) === null) return failure(`No task with id ${id}.`);
+        const staged = context.ops.addComment(id, String(args.content));
+        if (staged.result === null) return failure("A comment needs some text.");
+        await context.flush(staged.ops);
+        return result({ comment: formatComment(staged.result) });
       },
     },
 
