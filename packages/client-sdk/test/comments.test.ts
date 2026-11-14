@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Comment, JsonObject } from "@light/core";
 import { Operations } from "../src/operations.js";
-import { commentsOnTask, postedTime } from "../src/comments.js";
+import { commentsOnTask, postedTime, commentsOnProject } from "../src/comments.js";
 import { LightStore } from "../src/store.js";
 
 let store: LightStore;
@@ -164,5 +164,78 @@ describe("what deleting takes with it", () => {
 
     ops.deleteProject(t.projectId);
     expect(store.all("comment").map((c) => c.content)).toEqual(["elsewhere"]);
+  });
+});
+
+/**
+ * Notes left on a project rather than on a task.
+ *
+ * Todoist allows them and the importer has always kept them — `taskId` null,
+ * `projectId` set — into a field nothing read. These are the tests that say
+ * the two threads can never show each other's rows.
+ */
+describe("commentsOnProject", () => {
+  function seed() {
+    const store = new LightStore("test-device");
+    const ops = new Operations(store);
+    const project = ops.createProject({ name: "Agoda" }).result;
+    const task = ops.createTask({ projectId: project.id, content: "Ready the deck" }).result;
+    return { store, ops, project, task };
+  }
+
+  it("reads a note the importer left on the project", () => {
+    const { store, project } = seed();
+    // The imported shape: no taskId, a projectId, a real timestamp.
+    store.mutate("comment", "imported", {
+      id: "imported",
+      taskId: null,
+      projectId: project.id,
+      content: "Rates confirmed for Q1",
+      attachment: null,
+      postedById: "4213",
+      postedAt: "2026-02-04T11:12:13.456789Z",
+    });
+
+    expect(commentsOnProject(store, project.id).map((c) => c.content)).toEqual([
+      "Rates confirmed for Q1",
+    ]);
+  });
+
+  it("never shows a task's comment in the project thread", () => {
+    const { store, ops, project, task } = seed();
+    ops.addComment(task.id, "On the task");
+    ops.addProjectComment(project.id, "On the project");
+
+    expect(commentsOnProject(store, project.id).map((c) => c.content)).toEqual(["On the project"]);
+    expect(commentsOnTask(store, task.id).map((c) => c.content)).toEqual(["On the task"]);
+  });
+
+  it("writes a project comment with no taskId, which is what keeps them apart", () => {
+    const { ops, project } = seed();
+    const written = ops.addProjectComment(project.id, "  Spacing trimmed  ").result;
+
+    expect(written?.taskId).toBeNull();
+    expect(written?.projectId).toBe(project.id);
+    expect(written?.content).toBe("Spacing trimmed");
+  });
+
+  it("refuses a blank one, and one on a project that is not there", () => {
+    const { ops, project } = seed();
+    expect(ops.addProjectComment(project.id, "   ").ops).toEqual([]);
+    expect(ops.addProjectComment("nope", "Hello").ops).toEqual([]);
+  });
+
+  it("orders a project thread oldest first, like a task's", () => {
+    const { store, project } = seed();
+    for (const [id, postedAt, content] of [
+      ["b", "2026-02-05T09:00:00.000Z", "Second"],
+      ["a", "2026-02-04T09:00:00.000Z", "First"],
+    ] as const) {
+      store.mutate("comment", id, {
+        id, taskId: null, projectId: project.id, content,
+        attachment: null, postedById: null, postedAt,
+      });
+    }
+    expect(commentsOnProject(store, project.id).map((c) => c.content)).toEqual(["First", "Second"]);
   });
 });

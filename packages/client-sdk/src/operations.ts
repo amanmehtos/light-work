@@ -795,6 +795,30 @@ export class Operations {
     return { result: comment, ops: [this.store.mutate("comment", comment.id, comment)] };
   }
 
+  /**
+   * A comment on the project itself rather than on a task.
+   *
+   * The same row with the other id set; a comment never carries both, which is
+   * what keeps the two threads from ever showing each other's rows.
+   */
+  addProjectComment(projectId: string, content: string, now: Date = new Date()): Staged<Comment | null> {
+    const text = content.trim();
+    if (text === "" || this.store.get("project", projectId) === null) {
+      return { result: null, ops: [] };
+    }
+
+    const comment: Comment = {
+      id: newId(),
+      taskId: null,
+      projectId,
+      content: text,
+      attachment: null,
+      postedById: null,
+      postedAt: now.toISOString(),
+    };
+    return { result: comment, ops: [this.store.mutate("comment", comment.id, comment)] };
+  }
+
   deleteComment(id: string): Staged<{ deleted: boolean }> {
     if (this.store.get("comment", id) === null) return { result: { deleted: false }, ops: [] };
     return { result: { deleted: true }, ops: [this.store.remove("comment", id)] };

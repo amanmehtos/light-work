@@ -34,13 +34,34 @@ export function postedTime(comment: Pick<Comment, "postedAt">): number | null {
   return Number.isFinite(time) && time > 0 ? time : null;
 }
 
+/** Oldest first, ties settled the same way on every device. */
+function oldestFirst(a: Comment, b: Comment): number {
+  return (postedTime(a) ?? 0) - (postedTime(b) ?? 0) || a.id.localeCompare(b.id);
+}
+
 /** The comments on one task, oldest first. */
 export function commentsOnTask(store: LightStore, taskId: string): Comment[] {
   return store
     .all("comment")
     .filter((comment) => comment.taskId === taskId)
-    .sort(
-      (a, b) =>
-        (postedTime(a) ?? 0) - (postedTime(b) ?? 0) || a.id.localeCompare(b.id),
-    );
+    .sort(oldestFirst);
+}
+
+/**
+ * The comments on the project itself, oldest first.
+ *
+ * Todoist lets a note hang off a project rather than an item, and the importer
+ * keeps those: `taskId` null, `projectId` set. Nothing read them. They were
+ * synced, served and reachable by neither a person nor an agent — the same
+ * state the sections were in, and the one thing §1 of the plan singles out as
+ * worse than a missing feature, because it is the user's own writing.
+ *
+ * A comment carries only one of the two, so a task thread and a project thread
+ * can never show the same row twice.
+ */
+export function commentsOnProject(store: LightStore, projectId: string): Comment[] {
+  return store
+    .all("comment")
+    .filter((comment) => comment.taskId === null && comment.projectId === projectId)
+    .sort(oldestFirst);
 }

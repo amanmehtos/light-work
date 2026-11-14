@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { compareOrder, type Op, type Priority, type Section, type Task } from "@light/core";
-import { searchTasks, type DayScope, type RescheduleTarget } from "@light/client-sdk";
+import { commentsOnProject, searchTasks, type DayScope, type RescheduleTarget } from "@light/client-sdk";
 import { loadSession, logout, readConsentRequest, type StoredSession } from "./auth.js";
 import { Sky, ThemeToggle, describeLight, useDiurnal, useScrolled } from "./diurnal.js";
 import { useLightWeek } from "./store-hook.js";
@@ -14,6 +14,7 @@ import { AddSection } from "./components/AddSection.js";
 import { SectionHeading } from "./components/SectionHeading.js";
 import { Sidebar, type View } from "./components/Sidebar.js";
 import { TaskEditor } from "./components/TaskEditor.js";
+import { TaskComments } from "./components/TaskComments.js";
 import { TaskRow } from "./components/TaskRow.js";
 import {
   countRows,
@@ -794,6 +795,20 @@ function Workspace({
           <h1>{heading}</h1>
           {project !== null && project.description !== "" && (
             <p className="dn-prose project-description">{project.description}</p>
+          )}
+
+          {/* Notes left on the project itself, which Todoist allows and the
+              importer has always kept — `taskId` null, `projectId` set. Until
+              now nothing read them, so they were synced, served and reachable
+              by neither a person nor an agent. They sit under the description
+              because that is what they are: something about the project rather
+              than about any one task in it. */}
+          {project !== null && (
+            <TaskComments
+              key={project.id}
+              comments={commentsOnProject(store, project.id)}
+              onAdd={(text) => commit(ops.addProjectComment(project.id, text).ops)}
+            />
           )}
 
           {view.kind === "search" ? (

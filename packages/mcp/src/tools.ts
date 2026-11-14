@@ -13,6 +13,7 @@
 
 import { compareOrder, type Due, type Priority, type Task } from "@light/core";
 import {
+  commentsOnProject,
   commentsOnTask,
   meaning,
   parseRecurrence,
@@ -238,16 +239,41 @@ export function buildTools(): ToolDefinition[] {
       name: "list_comments",
       title: "List comments",
       description:
-        "The comments on one task, oldest first. Comments are the person's own notes on a " +
-        "task — often imported from Todoist — and are not part of its description, so read " +
-        "them when planning around a task rather than assuming the description is all there is.",
+        "The comments on one task, or on a project itself, oldest first. Comments are the " +
+        "person's own notes — often imported from Todoist — and are not part of the " +
+        "description, so read them when planning rather than assuming the description is all " +
+        "there is. Give either a taskId or a projectId.",
       readOnly: true,
-      inputSchema: { taskId: z.string() },
+      inputSchema: {
+        taskId: z.string().optional(),
+        projectId: z
+          .string()
+          .optional()
+          .describe("For notes left on the project itself rather than on any one task."),
+      },
       handler: async (args, context) => {
-        const id = String(args.taskId);
-        if (context.store.get("task", id) === null) return failure(`No task with id ${id}.`);
-        const comments = commentsOnTask(context.store, id).map(formatComment);
-        return result({ taskId: id, comments, total: comments.length });
+        const taskId = typeof args.taskId === "string" ? args.taskId : null;
+        const projectId = typeof args.projectId === "string" ? args.projectId : null;
+        if (taskId === null && projectId === null) {
+          return failure("Give either a taskId or a projectId.");
+        }
+        if (taskId !== null && projectId !== null) {
+          return failure("Give one of taskId or projectId, not both.");
+        }
+
+        if (taskId !== null) {
+          if (context.store.get("task", taskId) === null) {
+            return failure(`No task with id ${taskId}.`);
+          }
+          const comments = commentsOnTask(context.store, taskId).map(formatComment);
+          return result({ taskId, comments, total: comments.length });
+        }
+
+        if (context.store.get("project", projectId!) === null) {
+          return failure(`No project with id ${projectId!}.`);
+        }
+        const comments = commentsOnProject(context.store, projectId!).map(formatComment);
+        return result({ projectId, comments, total: comments.length });
       },
     },
 
