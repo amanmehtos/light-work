@@ -16,9 +16,15 @@
  *   every year · yearly · every N years
  *   every! ...   (Todoist's "from the completion date" variant)
  *
- * Dates are handled as plain UTC calendar days. A recurring task's time of day,
- * where it has one, is preserved untouched.
+ * An all-day task is a plain calendar day and stays one. A timed task is a UTC
+ * instant, and the day it falls on is worked out where the person is standing,
+ * not in UTC — nine in the morning is the evening before in UTC once you are
+ * east of about UTC+9, and advancing from that day skips one. The wall-clock
+ * time is preserved rather than the instant, so a 9am task is still 9am on the
+ * other side of a daylight-saving change.
  */
+
+import { clockAt, instantAt } from "./wallclock.js";
 
 const WEEKDAYS: Record<string, number> = {
   sunday: 0, sun: 0,
@@ -116,6 +122,49 @@ function splitDate(iso: string): { day: string; time: string } {
   return index === -1 ? { day: iso, time: "" } : { day: iso.slice(0, index), time: iso.slice(index) };
 }
 
+/**
+ * The day a due value falls on, where the person is standing.
+ *
+ * An all-day due is already a calendar day. A timed one is a UTC instant, and
+ * the ten characters at the front of it are the UTC day — which is not the
+ * same day east of about UTC+9, where nine in the morning is the evening
+ * before in UTC. Advancing from that wrong day is how "every weekday 9am"
+ * skipped a day each time it was completed: Friday's instant read as
+ * Thursday, so the next weekday came out Friday again rather than Monday.
+ */
+function dueParts(iso: string, zone?: string): { day: string; minutes: number | null } {
+  if (!iso.includes("T")) return { day: iso.slice(0, 10), minutes: null };
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return { day: iso.slice(0, 10), minutes: null };
+
+  const day = new Intl.DateTimeFormat("en-CA", {
+    ...(zone === undefined ? {} : { timeZone: zone }),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(when);
+  const [hours, mins] = clockAt(when, zone).split(":").map(Number);
+  return { day, minutes: (hours ?? 0) * 60 + (mins ?? 0) };
+}
+
+/**
+ * The next due value: a bare day when the task is all-day, and the same
+ * wall-clock time on the new day when it is not.
+ *
+ * Rebuilt rather than re-attached. Carrying the original `T…Z` across would
+ * keep the instant and so drift the clock face whenever the offset changed —
+ * a 9am task becoming 10am across a daylight-saving boundary. `instantAt`
+ * returns null for a wall-clock time that does not exist on that day (the
+ * spring-forward gap), and the old behaviour is the honest fallback there.
+ */
+function rebuild(day: string, minutes: number | null, zone: string | undefined, original: string): string {
+  if (minutes === null) return day;
+  const instant = instantAt(day, minutes, zone);
+  if (instant !== null) return instant;
+  const index = original.indexOf("T");
+  return index === -1 ? day : day + original.slice(index);
+}
+
 function toUtc(day: string): Date {
   return new Date(`${day}T00:00:00.000Z`);
 }
@@ -149,8 +198,10 @@ export function nextOccurrence(
   recurrence: Recurrence,
   currentDue: string,
   completedOn: string = new Date().toISOString().slice(0, 10),
+  /** Defaults to wherever this is running, which for a client is the user. */
+  zone?: string,
 ): string {
-  const { day, time } = splitDate(currentDue);
+  const { day, minutes } = dueParts(currentDue, zone);
   const today = splitDate(completedOn).day;
 
   if (recurrence.weekdays.length > 0) {
@@ -160,10 +211,10 @@ export function nextOccurrence(
     for (let step = 1; step <= 7 * Math.max(recurrence.interval, 1) + 7; step++) {
       const candidate = new Date(anchor.getTime() + step * 86_400_000);
       if (recurrence.weekdays.includes(candidate.getUTCDay())) {
-        return fromUtc(candidate) + time;
+        return rebuild(fromUtc(candidate), minutes, zone, currentDue);
       }
     }
-    return fromUtc(new Date(anchor.getTime() + 7 * 86_400_000)) + time;
+    return rebuild(fromUtc(new Date(anchor.getTime() + 7 * 86_400_000)), minutes, zone, currentDue);
   }
 
   const start = toUtc(recurrence.fromCompletion ? today : day);
@@ -191,5 +242,5 @@ export function nextOccurrence(
       guard += 1;
     }
   }
-  return fromUtc(next) + time;
+  return rebuild(fromUtc(next), minutes, zone, currentDue);
 }

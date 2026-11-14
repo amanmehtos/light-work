@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { nextOccurrence, parseRecurrence } from "../src/recurrence.js";
+import { clockAt } from "../src/wallclock.js";
 
 describe("parseRecurrence", () => {
   it("reads the plain intervals", () => {
@@ -107,5 +108,77 @@ describe("nextOccurrence", () => {
 
   it("handles a leap day yearly task", () => {
     expect(on("every year", "2028-02-29", "2028-02-29")).toBe("2029-02-28");
+  });
+});
+
+/**
+ * The day a repeat advances from is the day the person is on.
+ *
+ * A timed due is stored as a UTC instant. Nine in the morning in Brisbane
+ * (UTC+10) is 23:00 the evening before in UTC, so reading the day off the
+ * front of the instant gives yesterday — and "every weekday" advanced from
+ * yesterday lands back on today. The task never moved.
+ *
+ * Pinned to a named zone rather than the runtime's, so this fails for everyone
+ * and not only for someone sitting in the Pacific.
+ */
+describe("a repeat at a time of day, east of UTC", () => {
+  const brisbane = "Australia/Brisbane"; // UTC+10, and no daylight saving
+
+  /** The local Brisbane day of an instant, which is the whole point here. */
+  const dayThere = (iso: string) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: brisbane,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(iso));
+
+  // 09:00 on Friday 13 November in Brisbane is 23:00 on Thursday the 12th in
+  // UTC. Reading the day off the front of that instant gives Thursday.
+  const fridayAt9 = "2026-11-12T23:00:00.000Z";
+
+  it("is the Friday it looks like on the phone, not the Thursday it is in UTC", () => {
+    expect(dayThere(fridayAt9)).toBe("2026-11-13");
+    expect(fridayAt9.slice(0, 10)).toBe("2026-11-12"); // the trap
+  });
+
+  it("advances a weekly repeat from Friday, giving another Friday", () => {
+    // Completed on the Monday before, so the task's own day is what the
+    // advance starts from — which is where reading it in UTC goes wrong. When
+    // completion is on or after the due day the code takes the later of the
+    // two and the bug hides.
+    const weekly = parseRecurrence("every week")!;
+    const next = nextOccurrence(weekly, fridayAt9, "2026-11-09", brisbane);
+
+    expect(dayThere(next)).toBe("2026-11-20");
+    expect(clockAt(new Date(next), brisbane)).toBe("09:00");
+  });
+
+  it("advances every weekday from Friday to Monday, not back onto Friday", () => {
+    const weekdays = parseRecurrence("every weekday")!;
+    const next = nextOccurrence(weekdays, fridayAt9, "2026-11-10", brisbane);
+
+    // Read in UTC the anchor is Thursday, and the next weekday after Thursday
+    // is the Friday the task is already on — so it never moves.
+    expect(dayThere(next)).toBe("2026-11-16");
+    expect(clockAt(new Date(next), brisbane)).toBe("09:00");
+  });
+
+  it("keeps the clock face across a daylight-saving change", () => {
+    // Rebuilt from the instant, a 9am task comes back an hour out when the
+    // offset moves. Rebuilt from the wall clock, it does not.
+    const london = "Europe/London";
+    const weekly = parseRecurrence("every week")!;
+    const beforeTheChange = "2026-03-25T09:00:00.000Z"; // 09:00 GMT, Wed 25 Mar
+    const next = nextOccurrence(weekly, beforeTheChange, "2026-03-23", london);
+
+    expect(clockAt(new Date(next), london)).toBe("09:00");
+    expect(next).not.toBe("2026-04-01T09:00:00.000Z"); // that would be 10:00 BST
+  });
+
+  it("leaves an all-day repeat exactly as it was", () => {
+    const weekly = parseRecurrence("every week")!;
+    expect(nextOccurrence(weekly, "2026-11-13", "2026-11-09", brisbane)).toBe("2026-11-20");
   });
 });
