@@ -4,8 +4,8 @@ import LightKit
 
 /// The app's navigation: a list of places, and the screen each one opens.
 ///
-/// The root is `HomeView` — Inbox, Today, Upcoming, Day, Done, and the projects —
-/// and each place pushes onto it. A place is a list of tasks, or the day, and
+/// The root is `HomeView` — Inbox, Today, Upcoming, Light Week, Done, and the projects —
+/// and each place pushes onto it. A place is a list of tasks, or the week, and
 /// they share everything under the list: the rows, the swipes, the editor.
 ///
 /// It opens on Today. That is the screen someone opens this app for, and the
@@ -16,7 +16,7 @@ struct TaskListView: View {
 
     /// Where in the navigation the person is. Starts on Today: see above.
     @State private var path: [Destination] = [.today]
-    @State private var day = Schedule.localDay(Date())
+    @State private var week = Schedule.weekStart(of: Schedule.localDay(Date()))
     @State private var editing: LightKit.Task?
     @State private var rescheduling: LightKit.Task?
     @State private var deleting: LightKit.Task?
@@ -118,7 +118,7 @@ struct TaskListView: View {
         case .inbox: return "Inbox"
         case .today: return "Today"
         case .upcoming: return "Upcoming"
-        case .day: return "Your day"
+        case .week: return "Light Week"
         case .done: return "Done"
         case .project: return project(for: destination)?.name ?? "Project"
         }
@@ -150,8 +150,8 @@ struct TaskListView: View {
             case .upcoming:
                 list(model.upcomingBlocks(), nests: true, empty: "Nothing scheduled ahead",
                      detail: "Tasks with a date after today collect here, a day at a time.")
-            case .day:
-                DayView(model: model, day: $day) { editing = $0 }
+            case .week:
+                WeekView(model: model, start: $week) { editing = $0 }
             case .done:
                 list(model.completedBlocks(), nests: false, empty: "Nothing finished yet",
                      detail: "Tasks you complete collect here, and can be reopened.")

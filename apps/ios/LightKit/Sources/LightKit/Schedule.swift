@@ -133,19 +133,22 @@ public enum Schedule {
 
     /// Overlap, resolved into columns.
     ///
-    /// The same sweep as `layOut` in the web's `Day.tsx`: a block goes into
+    /// The same sweep as `layOut` in the web's `week.ts`: a block goes into
     /// the first column whose last block has already finished, and every block
     /// in a run of overlaps shares the width of that run. Two tasks at the
     /// same hour cannot both have the full width, or one of them would be
     /// invisible.
     public static func layOut(_ timed: [Task]) -> [String: (column: Int, columns: Int)] {
+        layOut(spans: timed.map { span(of: $0) })
+    }
+
+    /// The same sweep over bare spans, which is what Light Week lays out while
+    /// a block is in hand: the day as it would be, not as it is (`preview`).
+    public static func layOut(spans: [Span]) -> [String: (column: Int, columns: Int)] {
         struct Block { let id: String; let start: Int; let end: Int; var column = 0 }
 
-        let sorted = timed
-            .map { task -> Block in
-                let start = minutes(of: task.due) ?? 0
-                return Block(id: task.id, start: start, end: start + blockMinutes(task.duration))
-            }
+        let sorted = spans
+            .map { Block(id: $0.id, start: $0.start, end: $0.end) }
             .sorted { $0.start != $1.start ? $0.start < $1.start : $0.end < $1.end }
 
         var placed: [String: (column: Int, columns: Int)] = [:]

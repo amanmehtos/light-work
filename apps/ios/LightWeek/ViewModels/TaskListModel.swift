@@ -270,19 +270,11 @@ final class TaskListModel: ObservableObject {
     /// The inbox, if the account has one. Only the web makes one.
     var inbox: Project? { Navigation.inbox(visibleProjects) }
 
-    /// The open tasks on a given day, split into the timed and the waiting —
-    /// which is exactly the shape the day view draws.
-    func day(_ day: String) -> (timed: [LightKit.Task], waiting: [LightKit.Task]) {
-        let open = rows.map(\.task).filter { !$0.isCompleted }
-        let onDay = open.filter { Schedule.day(of: $0.due) == day }
-        return (
-            timed: onDay.filter { Schedule.minutes(of: $0.due) != nil }
-                .sorted { (Schedule.minutes(of: $0.due) ?? 0) < (Schedule.minutes(of: $1.due) ?? 0) },
-            // This day's untimed tasks first, then the genuinely unscheduled —
-            // both are things you could decide to do today.
-            waiting: onDay.filter { Schedule.minutes(of: $0.due) == nil }
-                + open.filter { $0.due == nil }
-        )
+    /// The week's open tasks, dealt into its days — each day's waiting (a
+    /// date, no time) and timed — which is exactly the shape Light Week draws.
+    /// A task with no date is in none of them; see `Schedule.bucket`.
+    func week(_ days: [String]) -> [String: Schedule.DayTasks] {
+        Schedule.bucket(rows.map(\.task), into: days)
     }
 
     /// A task's comments, oldest first, for the foot of its editor. The

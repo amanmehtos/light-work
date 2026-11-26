@@ -5,14 +5,14 @@ import LightKit
 /// A place the phone can go.
 ///
 /// These are the web sidebar's own entries, in the same order and under the same
-/// names: Inbox, Today, Upcoming, Day, Done (the web calls it Completed), and a
+/// names: Inbox, Today, Upcoming, Light Week, Done (the web calls it Completed), and a
 /// project. Labels and Search are not here this phase; neither has a phone
 /// screen yet.
 enum Destination: Hashable {
     case inbox
     case today
     case upcoming
-    case day
+    case week
     case done
     case project(String)
 }
@@ -44,9 +44,9 @@ struct HomeView: View {
                 }
                 place("Today", systemImage: "sun.max", count: counts.today, to: .today)
                 place("Upcoming", systemImage: "calendar", count: counts.upcoming, to: .upcoming)
-                // Counts what Today does: it is the same tasks, laid out against
-                // the hours they are meant to happen in.
-                place("Day", systemImage: "clock", count: counts.today, to: .day)
+                // No count, as on the web: it is somewhere to arrange the
+                // week's dated tasks against the hours, not a list to empty.
+                place("Light Week", systemImage: "calendar.day.timeline.left", count: 0, to: .week)
                 place("Done", systemImage: "checkmark.circle", count: counts.done, to: .done)
             }
             .listRowBackground(Color.clear)
