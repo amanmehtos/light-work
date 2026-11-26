@@ -6,7 +6,7 @@ import { Sky, ThemeToggle, describeLight, useDiurnal, useScrolled } from "./diur
 import { useLightWeek } from "./store-hook.js";
 import { AddTask, type AddRequest } from "./components/AddTask.js";
 import { Consent } from "./components/Consent.js";
-import { Day } from "./components/Day.js";
+import { Week } from "./components/Week.js";
 import { Preferences } from "./components/Preferences.js";
 import { Shortcuts } from "./components/Shortcuts.js";
 import { SignIn } from "./components/SignIn.js";
@@ -28,6 +28,7 @@ import {
 } from "./days.js";
 import { dayUnder, headingUnder, neighbour, planReorder, planSectionMove, rowUnder } from "./reorder.js";
 import { atDay, dueDay, localDay } from "./schedule.js";
+import { weekStart } from "./week.js";
 import { isTypingTarget, moveSelection, selectionAfterRemoval, type Shortcut } from "./shortcuts.js";
 import { groupBySection, onPage, type Group } from "./sections.js";
 import { arrangeSubtasks, descendantIds, flatRows, indexTasks, type Row } from "./subtasks.js";
@@ -167,10 +168,10 @@ function Workspace({
         break;
       case "today":
       case "upcoming":
-      case "day":
-        // Today and Upcoming are `todayArranged` and `upcomingGroups`; the day
-        // view reads the store itself, because what it needs — timed against
-        // untimed — is not a filter of one list.
+      case "week":
+        // Today and Upcoming are `todayArranged` and `upcomingGroups`; Light
+        // Week reads the store itself, because what it needs — seven days, each
+        // timed against untimed — is not a filter of one list.
         break;
     }
 
@@ -195,7 +196,7 @@ function Workspace({
     const rows: Row[] =
       agenda !== null
         ? agenda.flatMap((group) => group.rows)
-        : view.kind === "day"
+        : view.kind === "week"
           ? []
           : flat
             ? flatRows(list, index)
@@ -608,10 +609,10 @@ function Workspace({
     switch (shortcut) {
       case "quick-add":
         if (!ready) return false;
-        // The day and search views have no add line. Today is the neutral
+        // Light Week and search have no add line. Today is the neutral
         // place to land: a task made there goes to the inbox, as it would from
         // any view that is not a project.
-        if (view.kind === "day" || view.kind === "search") setView({ kind: "today" });
+        if (view.kind === "week" || view.kind === "search") setView({ kind: "today" });
         focusField("add");
         return true;
 
@@ -695,8 +696,8 @@ function Workspace({
       ? (project?.name ?? "Project")
       : view.kind === "today"
         ? "Today"
-        : view.kind === "day"
-          ? "Your day"
+        : view.kind === "week"
+          ? "Light Week"
           : view.kind === "upcoming"
             ? "Upcoming"
             : view.kind === "completed"
@@ -826,7 +827,9 @@ function Workspace({
           />
         </div>
 
-        <main className="main-column">
+        {/* The week needs the room a list does not: seven days do not fit the
+            measure a column of text is held to. */}
+        <main className={view.kind === "week" ? "main-column main-column--wide" : "main-column"}>
           <h1>{heading}</h1>
           {project !== null && project.description !== "" && (
             <p className="dn-prose project-description">{project.description}</p>
@@ -865,22 +868,22 @@ function Workspace({
               />
             </div>
           ) : (
-            view.kind !== "day" && (
+            view.kind !== "week" && (
               <AddTask onAdd={addTask} disabled={!ready} today={today} projects={namedProjects} />
             )
           )}
 
           {!ready ? (
             <p className="dn-hint pad">Loading your tasks…</p>
-          ) : view.kind === "day" ? (
-            <Day
-              day={view.day}
+          ) : view.kind === "week" ? (
+            <Week
+              start={view.start}
               store={store}
               ops={ops}
               commit={commit}
               revision={revision}
               today={today}
-              onDayChange={(day) => setView({ kind: "day", day })}
+              onWeekChange={(day) => setView({ kind: "week", start: weekStart(day) })}
               onOpen={(task) => setEditingId(task.id)}
               onComplete={complete}
             />

@@ -1,7 +1,7 @@
 /**
  * Views and the project tree.
  *
- * The nav is eight things and is meant to stay eight: Inbox, Today, Day,
+ * The nav is eight things and is meant to stay eight: Inbox, Today, Light Week,
  * Upcoming, Search, Labels, Completed, and Projects. "All tasks" was the ninth
  * and has gone — it was every open task in one column, which Search answers better
  * and no view of the account is the worse for losing. Anything that wants to be a
@@ -20,10 +20,12 @@ import { useState } from "react";
 import type { LightStore } from "@light/client-sdk";
 import { parentChoices, projectTree } from "../projects.js";
 import { ProjectsHeading } from "./ProjectsHeading.js";
+import { weekStart } from "../week.js";
 
 export type View =
   | { kind: "today" }
-  | { kind: "day"; day: string }
+  // The week whose first day is `start`; see `weekStart`.
+  | { kind: "week"; start: string }
   | { kind: "upcoming" }
   | { kind: "completed" }
   // Not a place so much as a question; `/` is the usual way in. It renders the
@@ -135,9 +137,10 @@ export function Sidebar({
           },
         ]),
     { view: { kind: "today" }, label: "Today", count: counts.today },
-    // The planning surface, as opposed to the list: same tasks, laid out
-    // against the hours they are meant to happen in.
-    { view: { kind: "day", day: today }, label: "Day", count: counts.today },
+    // The planning surface, as opposed to the list: the week's dated tasks,
+    // laid out against the hours they are meant to happen in. No count: it is
+    // somewhere to arrange things, not a list to empty.
+    { view: { kind: "week", start: weekStart(today) }, label: "Light Week", count: 0 },
     { view: { kind: "upcoming" }, label: "Upcoming", count: counts.upcoming },
     { view: { kind: "search" }, label: "Search", count: 0 },
   ];

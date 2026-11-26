@@ -45,7 +45,7 @@ describe("the sidebar", () => {
     expect(heading).toBeGreaterThan(-1);
     const labels = [...html.slice(0, heading).matchAll(/dn-nav__label">([^<]+)</g)].map((m) => m[1]);
     // Seven here, and the Projects heading is the eighth.
-    expect(labels).toEqual(["Inbox", "Today", "Day", "Upcoming", "Search", "Labels", "Completed"]);
+    expect(labels).toEqual(["Inbox", "Today", "Light Week", "Upcoming", "Search", "Labels", "Completed"]);
 
     // The control is a button on the heading's row, not an entry in a nav list.
     const add = html.indexOf('aria-label="Add project"');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { layOut } from "../src/components/Day.js";
+import { layOut } from "../src/week.js";
 
 /**
  * The overlap sweep.
